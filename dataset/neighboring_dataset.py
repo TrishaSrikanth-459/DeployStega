@@ -31,7 +31,7 @@ class NeighboringDataset:
                 raise IndexError(f"replacement index {idx} out of bounds for dataset of size {dataset_len}")
             if not isinstance(trace, InteractionTrace):
                 raise TypeError("replacement values must be InteractionTrace instances")
-                validated[idx] = trace
+            validated[idx] = trace
 
         # Enforce exactly k replacements
         if len(validated) != len(replacements):
@@ -41,22 +41,22 @@ class NeighboringDataset:
         self._base_dataset: BenignDataset = base_dataset
         self._replacements: Mapping[int, InteractionTrace] = MappingProxyType(validated)
 
-        # Public API
-        def __len__(self) -> int:
-            """
-            Dataset length is unchanged from base dataset.
-            """
-            return len(self._base_dataset)
+    # Public API
+    def __len__(self) -> int:
+        """
+        Dataset length is unchanged from base dataset.
+        """
+        return len(self._base_dataset)
 
-        def get_trace(self, index: int) -> InteractionTrace:
-            """
-            Return the InteractionTrace at index.
-            Replacement is visible iff index ∈ replacements.
-            """
-            if not isinstance(index, int):
-                raise TypeError("index must be an integer")
-            if index < 0 or index >= len(self):
-                raise IndexError("index out of bounds")
-            if index in self._replacements:
-                return self._replacements[index]
-            return self._base_dataset.get_trace(index)
+    def get_trace(self, index: int) -> InteractionTrace:
+        """
+        Return the InteractionTrace at index.
+        Replacement is visible iff index ∈ replacements.
+        """
+        if not isinstance(index, int):
+            raise TypeError("index must be an integer")
+        if index < 0 or index >= len(self):
+            raise IndexError("index out of bounds")
+        if index in self._replacements:
+            return self._replacements[index]
+        return self._base_dataset.get_trace(index)
