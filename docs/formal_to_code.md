@@ -1,6 +1,4 @@
----
-
-## **Transcript (T)**
+## Transcript (T)
 
 **Formal definition:**  
  Abstract structured object representing adversarially specified intent.
