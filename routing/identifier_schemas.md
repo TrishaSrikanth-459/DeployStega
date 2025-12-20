@@ -190,3 +190,72 @@ identity relative to the updated (owner, repo) namespace.
 - Issue comments are distinct from pull request review comments.
 
 ---
+
+## Artifact Class: Pull Request Review Comments
+
+### Description
+A PullRequestReviewComment is a user-authored comment
+attached to a specific pull request, typically associated
+with a code diff or review discussion. These comments
+are routinely accessed during code review workflows.
+
+### Identifier Fields
+- owner: string; not case sensitive
+- repo: string; not case sensitive
+- pull_number: integer
+- comment_id: integer
+
+### Identifier Construction Rule
+A pull request review comment is uniquely identified by the ordered tuple
+(owner, repo, pull_number, comment_id).
+- owner and repo identify the repository namespace.
+- pull_number identifies the parent pull request within the repository.
+- comment_id identifies the specific review comment.
+All identifier fields are immutable once the comment is created.
+Repository renames or ownership transfers preserve the comment’s
+identity relative to the updated (owner, repo) namespace.
+
+### Addressability
+- REST API: GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
+- Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
+
+### Notes
+- Pull request review comments are distinct from issue comments.
+- Review comments may be associated with specific commits or diff positions,
+  but these associations are mutable metadata and are not part of the identifier.
+
+---
+
+## Artifact Class: CommitComment
+
+### Description
+A commit comment is a user-authored comment attached to a specific commit,
+used for code review, clarification, or discussion at the commit level.
+
+### Identifier Fields
+- owner: string; not case sensitive
+- repo: string; not case sensitive
+- comment_id: integer
+
+### Identifier Construction Rule
+A commit comment is uniquely identified by the ordered tuple
+(owner, repo, comment_id), where:
+- owner is the user or organization name owning the repository
+- repo is the repository name
+- comment_id is a globally unique integer identifier assigned by GitHub
+The comment_id uniquely identifies the comment within the repository,
+independent of the commit SHA on which it appears.
+
+### Addressability
+- REST API: GET /repos/{owner}/{repo}/comments/{comment_id}
+- Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
+
+### Notes
+- Media-type variants (raw, text, HTML, full) affect only the representation
+  of comment content and do not alter the comment’s identifier.
+- Access to commit comments may require repository metadata read permissions
+  for private repositories
+- A 404 Not Found response may indicate lack of access, deletion, or nonexistence.
+
+---
+
