@@ -50,8 +50,8 @@ fields are case-insensitive and immutable once the repostiory exists, except
 under explicit rename or transfer options.
 
 ### Addressability
-REST API: GET /repos/{owner}/{repo}
-URL: https://github.com/{owner}/{repo}
+- REST API: GET /repos/{owner}/{repo}
+- URL: https://github.com/{owner}/{repo}
 
 ### Notes
 - Repository identifiers remain stable across all access-control levels.
@@ -71,7 +71,7 @@ objects exposed via stable numeric identifiers within a repository.
 
 ### Identifier Fields
 - owner: string; not case sensitive
-- repo: string; not case sensitive.
+- repo: string; not case sensitive
 - issue_number: integer
 
 ### Identifier Construction Rule
@@ -83,8 +83,8 @@ An issue is uniquely identified by the ordered triple
   identifier assigned at creation. 
 
 ### Addressability
-REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
-Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+- REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
+- Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ### Notes
 - GitHub’s REST API treats pull requests as a subtype of issues; thus, issue
@@ -97,38 +97,96 @@ Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ---
 
-## Artifact Class: Issue
+## Artifact Class: PullRequest
 
 ### Description
-A GitHub issue represents a tracked unit of work, discussion, or a bug
-report associated with a specific repository. Issues are addressable
-objects exposed via stable numeric identifiers within a repository.
+A GitHub pull request represents a proposed set of changes from
+a source branch into a target branch within a repository, along
+with associated discussion and review activity.
 
 ### Identifier Fields
 - owner: string; not case sensitive
-- repo: string; not case sensitive.
-- issue_number: integer
+- repo: string; not case sensitive
+- pull_number: integer; not case sensitive
 
 ### Identifier Construction Rule
-An issue is uniquely identified by the ordered triple 
-(owner, repo, issue_number), where:
-- owner is the repository owner (user or organization)
-- repo is the repository name
-- issue_number is the repository-scoped numeric
-  identifier assigned at creation. 
+A pull request is uniquely identified by the ordered triple
+(owner, repo, pull_number).
+
+The pull_number is assigned at creation time, is unique within
+a repository, and remains stable for the lifetime of the pull
+request.
 
 ### Addressability
-REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
-Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+- REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}
+- Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
 
 ### Notes
-- GitHub’s REST API treats pull requests as a subtype of issues; thus, issue
-  endpoints may return both issues and pull requests. This distinction does not
-  affect identifier structure.
-- Issue transfer between repositories results in a 301 response; deletion may
-  result in 404 or 410 responses depending on viewer permissions.
-- Routing logic depends solely on identifier addressability, not returned content
-  representation.
+- Draft status, mergeability state, merge commits, and review outcomes are
+  mutable metadata and are not part of the identifier.
+- Pull requests are distinct from issues, even though GitHub’s API may expose
+  pull requests through issue-related endpoints.
+- Repository transfers or renames preserve pull request identity relative to the
+  updated (owner, repo) namespace.
 
 ---
 
+## Artifact Class: Commits
+
+### Description
+A GitHub commit represents a single immutable snapshot of repository state,
+identified by a cryptographic hash and addressable within a repository.
+
+### Identifier Fields
+- owner: string; not case sensitive
+- repo: string; not case sensitive
+- commit_sha: hexadecimal hash; case sensitive
+
+### Identifier Construction Rule
+A commit is uniquely identified by the ordered tuple
+(owner, repo, commit_sha), where commit_sha is the full commit hash
+The commit hash is content-addressed and immutable once created.
+
+### Addressability
+- REST API: GET /repos/{owner}/{repo}/commits/{commit_sha}
+- URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+
+### Notes
+- Branch membership, pull request association, and comparison relationships
+  are derived metadata and are not part of the identifier.
+- Repository renames or transfers do not alter commit identity relative to the
+  updated (owner, repo) namespace.
+
+---
+
+## Artifact Class: Issue comments
+
+### Description
+An IssueComment is a user-authored comment attached to a specific issue
+within a GitHub repository. Issue comments are routinely accessed during
+code review, debugging, and project coordination.
+
+### Identifier Fields
+- owner: string; not case sensitive
+- repo: string; not case sensitive
+- issue_number: integer
+- comment_id: integer
+
+### Identifier Construction Rule
+An issue comment is uniquely identified by the ordered tuple
+(owner, repo, issue_number, comment_id).
+- issue_number identifies the parent issue within the repository.
+- comment_id identifies the specific comment within that issue.
+
+All identifier fields are immutable once the comment is created.
+Issue transfers or repository renames preserve the comment’s 
+identity relative to the updated (owner, repo) namespace.
+
+### Addressability
+- REST API: GET /repos/{owner}/{repo}/issues/{issue_number}/comments
+- Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+
+### Notes
+- Issue comments are distinct from pull request review comments.
+
+---
