@@ -1,0 +1,134 @@
+# Routing Namespace and Identifier Schemas
+
+## Overview
+This document defines the complete routing namespace used by DeployStega.
+The routing namespace enumerates all addressable artifact classes exposed
+by the application and specifies their identifier schemas.
+
+The namespace is structural only: it specifies what artifacts exist and
+how they are identified, not when or how they are accessed.
+
+## Access-control considerations
+Identifier immutability claims are independent of access permissions.
+Repositories may expose different metadata fields depending on viewer
+permissions, but identifier fields remain stable across all access levels.
+We assume that sender and receiver possess legitimate access to any artifacts
+referenced for routing. Access control enforcement is treated as external to
+the routing model and does not affect detectability or feasibility.
+
+## Access Failure Handling
+Artifact retrieval may result in non-200 responses (e.g., 301, 403, 404) due 
+to network conditions or other unexpected circumstances. All such 
+outcomes are treated as successful access attempts for logging and observability 
+purposes, since the receiver explicitly initiated the access. Routing semantics depend 
+solely on artifact addressability and access attempts, not access success.
+
+## Receiver Access Mechanism
+The receiver is modeled as accessing artifacts through standard, user-facing GitHub
+web URLs (e.g., https://github.com/{owner}/{repo}), as would occur during routine
+browsing activity. The model does not assume programmatic access via the GitHub
+REST or GraphQL APIs, nor the use of scripted clients such as curl or custom tooling.
+This restriction ensures that all routing events correspond to ordinary web 
+interactions observable in benign platform logs.
+
+---
+
+## Artifact Class: Repository
+
+### Description
+A GitHub repository is the top-level container for source code, issues, 
+pull requests, commits, and related collaborative artifacts.
+
+### Identifier Fields
+- owner: string; not case sensitive
+- repo: string; not case sensitive.
+
+### Identifier Construction Rule
+A repository is uniquely identified by the ordered pair (owner, repo), where 
+owner is the user or organization name and repo is the repostiory name. Both
+fields are case-insensitive and immutable once the repostiory exists, except
+under explicit rename or transfer options.
+
+### Addressability
+REST API: GET /repos/{owner}/{repo}
+URL: https://github.com/{owner}/{repo}
+
+### Notes
+- Repository identifiers remain stable across all access-control levels.
+- Fork relationships introduce parent and source metadata but do not alter
+  the repository’s primary identifier.
+- Repository renames and ownership transfers are rare administrative events
+  and are treated as out-of-scope mutations for routing stability.
+
+---
+
+## Artifact Class: Issue
+
+### Description
+A GitHub issue represents a tracked unit of work, discussion, or a bug
+report associated with a specific repository. Issues are addressable
+objects exposed via stable numeric identifiers within a repository.
+
+### Identifier Fields
+- owner: string; not case sensitive
+- repo: string; not case sensitive.
+- issue_number: integer
+
+### Identifier Construction Rule
+An issue is uniquely identified by the ordered triple 
+(owner, repo, issue_number), where:
+- owner is the repository owner (user or organization)
+- repo is the repository name
+- issue_number is the repository-scoped numeric
+  identifier assigned at creation. 
+
+### Addressability
+REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
+Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+
+### Notes
+- GitHub’s REST API treats pull requests as a subtype of issues; thus, issue
+  endpoints may return both issues and pull requests. This distinction does not
+  affect identifier structure.
+- Issue transfer between repositories results in a 301 response; deletion may
+  result in 404 or 410 responses depending on viewer permissions.
+- Routing logic depends solely on identifier addressability, not returned content
+  representation.
+
+---
+
+## Artifact Class: Issue
+
+### Description
+A GitHub issue represents a tracked unit of work, discussion, or a bug
+report associated with a specific repository. Issues are addressable
+objects exposed via stable numeric identifiers within a repository.
+
+### Identifier Fields
+- owner: string; not case sensitive
+- repo: string; not case sensitive.
+- issue_number: integer
+
+### Identifier Construction Rule
+An issue is uniquely identified by the ordered triple 
+(owner, repo, issue_number), where:
+- owner is the repository owner (user or organization)
+- repo is the repository name
+- issue_number is the repository-scoped numeric
+  identifier assigned at creation. 
+
+### Addressability
+REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
+Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+
+### Notes
+- GitHub’s REST API treats pull requests as a subtype of issues; thus, issue
+  endpoints may return both issues and pull requests. This distinction does not
+  affect identifier structure.
+- Issue transfer between repositories results in a 301 response; deletion may
+  result in 404 or 410 responses depending on viewer permissions.
+- Routing logic depends solely on identifier addressability, not returned content
+  representation.
+
+---
+
