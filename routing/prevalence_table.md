@@ -17,14 +17,30 @@ whether specific users behave suspiciously.
 
 ## Measurement Definition
 
-### Observation Window
+### Time Window Selection
 
-All counts are computed over a fixed, explicitly defined time window:
+Artifact prevalence statistics are computed over a fixed, closed historical
+window rather than a rolling or real-time interval.
 
-- **Start time**: `<YYYY-MM-DD>`
-- **End time**: `<YYYY-MM-DD>`
+**Time window:** June 1, 2025 → August 31, 2025
 
-Only access events occurring within this window are included.
+This window was chosen to satisfy the following criteria:
+
+- It reflects contemporary GitHub usage patterns relevant to modern
+  collaborative development workflows.
+- The interval is fully completed, avoiding partial ingestion, delayed
+  event reporting, or incomplete hourly archives.
+- The three-month duration is sufficient to smooth short-term fluctuations
+  in activity while remaining focused on structural artifact prevalence
+  rather than long-term platform evolution.
+- Using a fixed historical window ensures reproducibility and prevents
+  confounding effects from ongoing platform changes or measurement drift.
+
+The purpose of this window is not to model temporal trends or seasonality,
+but to establish a representative baseline for the **marginal frequency of
+artifact access events** in benign platform logs. These prevalence estimates
+characterize what artifacts are commonly accessed under normal conditions
+and provide empirical grounding for the routing namespace.
 
 ---
 
@@ -85,12 +101,15 @@ analysis.
 
 | Artifact Class | Raw Count | Relative Frequency | Notes |
 |----------------|-----------|--------------------|-------|
-| `<ClassName1>` | `<count>` | `<fraction>`       | `<optional>` |
-| `<ClassName2>` | `<count>` | `<fraction>`       | `<optional>` |
-| `<ClassName3>` | `<count>` | `<fraction>`       | `<optional>` |
-| …              | …         | …                  | … |
+| `Repository` | `<count>` | `<fraction>`       | `<optional>` |
+| `Issue` | `<count>` | `<fraction>`       | `<optional>` |
+| `PullRequest` | `<count>` | `<fraction>`       | `<optional>` |
+| `Commit` | `<count>` | `<fraction>`       | `<optional>` |
+| `IssueComment` | `<count>` | `<fraction>`       | `<optional>` |
+| `PullRequestReviewComment` | `<count>` | `<fraction>`       | `<optional>` |
+| `CommitComment` | `<count>` | `<fraction>`       | `<optional>` |
 
----
+--- 
 
 ## Column Definitions
 
