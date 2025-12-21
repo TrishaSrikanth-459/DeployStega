@@ -5,44 +5,79 @@
 This document reports the marginal prevalence of each artifact class in the
 routing namespace, measured over benign GitHub interaction logs.
 
-Prevalence is defined as **raw access counts per artifact class**, without
-considering ordering, timing, transitions, or sender–receiver relationships.
-These statistics characterize how frequently different artifact classes appear
-in normal platform activity and do not encode behavioral structure.
+Prevalence is defined as **raw access-event counts per artifact class** within a
+specified observation window. These statistics characterize how frequently
+different artifact classes are *accessed* in normal platform activity and do
+not encode behavioral structure, user intent, or routing paths.
+
+This document is **structural and population-level**. It does not assess
+whether specific users behave suspiciously.
 
 ---
 
 ## Measurement Definition
 
+### Observation Window
+
+All counts are computed over a fixed, explicitly defined time window:
+
+- **Start time**: `<YYYY-MM-DD>`
+- **End time**: `<YYYY-MM-DD>`
+
+Only access events occurring within this window are included.
+
+---
+
 ### Unit of Measurement
 
-Each count corresponds to a single observed access or reference to an artifact
-instance in benign platform logs.
+Each count corresponds to a **single logged access event** referencing an
+artifact instance in benign platform logs.
 
-The exact interpretation of an “access” depends on the source dataset and is
-documented alongside the counting procedure.
+An *access event* is defined as:
+
+- A recorded interaction in the source dataset indicating that a user viewed,
+  fetched, or otherwise referenced an artifact instance.
+- The exact logging mechanism depends on the data source and is documented
+  alongside the counting procedure.
+
+---
+
+### Counting Semantics
+
+- Each access event is counted independently.
+- Multiple accesses to the same artifact by the **same user** are counted
+  separately.
+- Accesses to the same artifact by **different users** are also counted
+  separately.
+- No aggregation or normalization is performed at the user level.
+
+This document intentionally does **not** distinguish access events by user
+identity.
+
+User-level repetition, concentration, or deviation from baseline behavior is
+modeled separately through behavioral feature extraction and adversarial
+analysis.
+
+---
 
 ### Included Artifacts
 
-Only artifact classes defined in the routing namespace are counted. No other
-platform objects or metadata fields are included.
+- Only artifact classes defined in the routing namespace are counted.
+- No other platform objects, metadata fields, or derived entities are included.
 
 ---
 
 ## Data Sources
 
 - **Primary sources**:
-  - `<DataSourceName1>` (e.g., GH Archive)
-  - `<DataSourceName2>` (e.g., GHTorrent)
+  - `GH Archive`
+  - `GHTorrent`
 
 - **Dataset version(s)**:
-  - `<Version / snapshot date>`
-
-- **Time window**:
-  - `<Start date>` → `<End date>`
+  - `<Version identifier / snapshot date>`
 
 - **Population scope**:
-  - `<e.g., public repositories / collaborator activity / all users>`
+  - `<e.g., public repositories only / collaborator activity / all users>`
 
 ---
 
@@ -55,58 +90,47 @@ platform objects or metadata fields are included.
 | `<ClassName3>` | `<count>` | `<fraction>`       | `<optional>` |
 | …              | …         | …                  | … |
 
-### Column Definitions
+---
 
-- **Artifact Class**  
-  Name of the artifact class as defined in the routing namespace.
+## Column Definitions
 
-- **Raw Count**  
-  Total number of observed accesses for this artifact class.
+### Artifact Class
+Name of the artifact class as defined in the routing namespace.
 
-- **Relative Frequency**  
-  Normalized frequency computed as:
+### Raw Count
+Total number of logged access events referencing artifacts of this class within
+the observation window.
 
-class_raw_count / total_raw_count_across_all_classes
+### Relative Frequency
+Normalized prevalence computed as:
+
+raw_count / total_raw_count_across_all_classes
 
 yaml
 Copy code
 
-- **Notes** (optional)  
-Any caveats, anomalies, or dataset-specific observations.
+Relative frequencies sum to 1.0 across all artifact classes.
+
+### Notes (optional)
+Dataset-specific caveats, anomalies, or interpretation notes.
 
 ---
 
 ## Normalization Procedure
 
-- Let:
+Let:
 
 Total = Σ (raw counts across all artifact classes)
 
-vbnet
+perl
 Copy code
 
-- Relative frequency for each class is computed as:
+For each artifact class:
 
-raw_count / Total
+relative_frequency = raw_count / Total
 
 yaml
 Copy code
-
-- Relative frequencies sum to 1.0 across all classes.
-
----
-
-## Interpretation Constraints
-
-- These counts represent **marginal prevalence only**.
-- No information is captured about:
-- access order
-- timing
-- sessions
-- correlations
-- routing paths
-- Prevalence statistics are **not routing rules** and do not constrain
-sender or receiver behavior directly.
 
 ---
 
@@ -114,41 +138,39 @@ sender or receiver behavior directly.
 
 The prevalence table is used to:
 
-- Characterize realism of the routing namespace
+- Characterize realism and coverage of the routing namespace
 - Inform discussion of artifact selection bias
 - Support sensitivity and ablation analyses
 - Provide empirical grounding for routing assumptions
 
-These values are **not** used to train behavioral models or enforce feasibility
-constraints.
+These values are **not** used to:
+- train behavioral models
+- enforce feasibility constraints
+- detect covert communication
 
 ---
 
 ## Limitations
 
-- Counts depend on:
-- dataset coverage
-- logging granularity
-- sampling window
+- Counts depend on dataset coverage, logging granularity, and sampling window.
 - Rare artifact classes may be underrepresented.
-- Results may not generalize across time periods or repository populations.
+- Results may not generalize across platforms, repositories, or time periods.
 
 ---
 
 ## Reproducibility
 
 - Raw counts are derived from:
-- `data/derived/routing_prevalence/artifact_counts.csv`
+  - `data/derived/routing_prevalence/artifact_counts.csv`
 - Relative frequencies are derived from:
-- `data/derived/routing_prevalence/artifact_frequencies.csv`
+  - `data/derived/routing_prevalence/artifact_frequencies.csv`
 
-- Any scripts used for counting are documented separately and do not implement
-routing logic or behavioral assumptions.
+Any scripts used for counting are documented separately
 
 ---
 
 ## Change Log
 
-- `<Date>` — Initial template created
+- `<Date>` — Template created
 - `<Date>` — Counts populated
 - `<Date>` — Dataset version updated
