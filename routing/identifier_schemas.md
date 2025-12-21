@@ -99,13 +99,19 @@ owner is the user or organization name and repo is the repostiory name. Both
 fields are case-insensitive and immutable once the repostiory exists, except
 under explicit rename or transfer options.
 
-### Addressability
+### Addressability (Sender)
+- REST API: GET /repos/{owner}/{repo}
+- URL: https://github.com/{owner}/{repo}
+
+### Addressability (Receiver)
 - REST API: GET /repos/{owner}/{repo}
 - URL: https://github.com/{owner}/{repo}
 
 ### Notes
-- Fork relationships introduce parent and source metadata but do not alter
-  the repository’s primary identifier.
+-The sender operates as a legitimate collaborator within an existing
+repository shared with the receiver. Repository existence is assumed
+as part of the system configuration and is not itself a covert signal.
+Sender-side repository-creation interfaces are therefore out of scope.
 
 ---
 
@@ -127,9 +133,13 @@ An issue is uniquely identified by the ordered triple
 - owner is the repository owner (user or organization)
 - repo is the repository name
 - issue_number is the repository-scoped numeric
-  identifier assigned at creation. 
+  identifier assigned at creation.
 
-### Addressability
+### Addressability (Sender)
+- REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
+- Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+
+### Addressability (Receiver)
 - REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
 - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
@@ -139,8 +149,6 @@ An issue is uniquely identified by the ordered triple
   affect identifier structure.
 - Issue transfer between repositories results in a 301 response; deletion may
   result in 404 or 410 responses depending on viewer permissions.
-- Routing logic depends solely on identifier addressability, not returned content
-  representation.
 
 ---
 
