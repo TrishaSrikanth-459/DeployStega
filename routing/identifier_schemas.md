@@ -8,32 +8,78 @@ by the application and specifies their identifier schemas.
 The namespace is structural only: it specifies what artifacts exist and
 how they are identified, not when or how they are accessed.
 
+## Sender and Receiver Interaction Roles
+
+The routing namespace enumerates addressable artifact classes independent
+of actor role.
+
+We distinguish between two interaction roles:
+
+- **Sender**: an account capable of creating, modifying, or deleting
+  artifacts in order to encode information.
+- **Receiver**: an account that accesses existing artifacts through
+  standard, read-only interactions in order to observe information.
+
+Sender and receiver interactions need not use identical API endpoints
+or HTTP methods. Sender actions may create or modify artifacts using
+write-capable interfaces, while receiver actions reference the same
+artifact identifiers through read-only, user-facing access mechanisms
+(e.g., web URLs).
+
+Routing semantics depend on shared artifact identifiers, not on the
+specific API endpoints, permissions, or HTTP verbs used to access them.
+
+## Noise and Benign Activity
+
+The routing namespace includes artifact classes that appear in benign
+platform activity regardless of whether they are used for signaling.
+
+The presence of benign accesses to routing artifacts is intentional.
+Noise is modeled implicitly through the natural prevalence and access
+distribution of artifact classes, rather than through separate
+noise-specific artifacts.
+
+No artifact in the namespace is assumed to be signaling by default.
+
 ## Access-control considerations
 Identifier immutability claims are independent of access permissions.
-Repositories may expose different metadata fields depending on viewer
-permissions, but identifier fields remain stable across all access levels.
+Repositories and other artifacts may expose different metadata fields depending
+on viewer permissions, but identifier fields remain stable across all access
+levels.
 
-We assume that sender and receiver possess legitimate access to any artifacts
-referenced for routing. Access control enforcement is treated as external to
-the routing model and does not affect routing feasibility or detectability.
+We assume that both sender and receiver possess legitimate access to any
+artifacts referenced for routing, appropriate to their respective roles.
+Specifically:
+- The sender is authorized to create or modify artifacts used for signaling.
+- The receiver is authorized to access (view) those artifacts through
+standard read-side interfaces.
+
+Access-control enforcement is treated as external to the routing model and does
+not affect routing feasibility or detectability, provided that identifier
+addressability is preserved.
 
 ## Access Failure Handling
-Artifact retrieval may result in non-200 responses (e.g., 301, 403, 404) due
-to network conditions, repository evolution, or permission changes. All such
-outcomes are treated as benign access attempts for logging and observability
-purposes, since the receiver explicitly initiated the access.
+Artifact access or retrieval—by either sender or receiver—may result in non-200
+responses (e.g., 301, 403, 404) due to network conditions, repository evolution,
+permission changes, or platform behavior.
 
-Routing semantics depend solely on artifact addressability and access attempts,
-not retrieval success or response contents.
+All such outcomes are treated as benign access attempts for logging and
+observability purposes, since the access was explicitly initiated by the
+account. Routing semantics depend solely on artifact addressability and access
+attempts, not on retrieval success, response codes, or response contents.
 
 ## Receiver Access Mechanism
-The receiver is modeled as accessing artifacts through standard, user-facing
-GitHub web URLs (e.g., https://github.com/{owner}/{repo}), as would occur during
-routine browsing activity. The model does not assume programmatic access via
-the GitHub REST or GraphQL APIs, nor the use of scripted clients.
+The sender is modeled as interacting with artifacts through legitimate,
+write-capable interfaces consistent with normal collaborator behavior.
 
-This restriction ensures that all routing events correspond to ordinary web
-interactions observable in benign platform logs.
+The receiver is modeled as accessing artifacts exclusively through
+standard, user-facing GitHub web URLs (e.g.,
+https://github.com/{owner}/{repo}), as would occur during routine browsing
+activity.
+
+The model does not assume programmatic access via the GitHub REST or GraphQL
+APIs, nor the use of scripted clients, for receiver behavior. Routing semantics
+remain artifact-centric rather than endpoint- or permission-centric.
 
 ---
 
