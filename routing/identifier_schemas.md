@@ -12,23 +12,27 @@ how they are identified, not when or how they are accessed.
 Identifier immutability claims are independent of access permissions.
 Repositories may expose different metadata fields depending on viewer
 permissions, but identifier fields remain stable across all access levels.
+
 We assume that sender and receiver possess legitimate access to any artifacts
 referenced for routing. Access control enforcement is treated as external to
-the routing model and does not affect detectability or feasibility.
+the routing model and does not affect routing feasibility or detectability.
 
 ## Access Failure Handling
-Artifact retrieval may result in non-200 responses (e.g., 301, 403, 404) due 
-to network conditions or other unexpected circumstances. All such 
-outcomes are treated as successful access attempts for logging and observability 
-purposes, since the receiver explicitly initiated the access. Routing semantics depend 
-solely on artifact addressability and access attempts, not access success.
+Artifact retrieval may result in non-200 responses (e.g., 301, 403, 404) due
+to network conditions, repository evolution, or permission changes. All such
+outcomes are treated as benign access attempts for logging and observability
+purposes, since the receiver explicitly initiated the access.
+
+Routing semantics depend solely on artifact addressability and access attempts,
+not retrieval success or response contents.
 
 ## Receiver Access Mechanism
-The receiver is modeled as accessing artifacts through standard, user-facing GitHub
-web URLs (e.g., https://github.com/{owner}/{repo}), as would occur during routine
-browsing activity. The model does not assume programmatic access via the GitHub
-REST or GraphQL APIs, nor the use of scripted clients such as curl or custom tooling.
-This restriction ensures that all routing events correspond to ordinary web 
+The receiver is modeled as accessing artifacts through standard, user-facing
+GitHub web URLs (e.g., https://github.com/{owner}/{repo}), as would occur during
+routine browsing activity. The model does not assume programmatic access via
+the GitHub REST or GraphQL APIs, nor the use of scripted clients.
+
+This restriction ensures that all routing events correspond to ordinary web
 interactions observable in benign platform logs.
 
 ---
@@ -54,11 +58,8 @@ under explicit rename or transfer options.
 - URL: https://github.com/{owner}/{repo}
 
 ### Notes
-- Repository identifiers remain stable across all access-control levels.
 - Fork relationships introduce parent and source metadata but do not alter
   the repository’s primary identifier.
-- Repository renames and ownership transfers are rare administrative events
-  and are treated as out-of-scope mutations for routing stability.
 
 ---
 
