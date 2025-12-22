@@ -68,17 +68,13 @@ observability purposes, since the access was explicitly initiated by the
 account. 
 
 ## Access Mechanisms
-The sender is modeled as interacting with artifacts through legitimate,
-write-capable interfaces consistent with normal collaborator behavior.
-
-The receiver is modeled as accessing artifacts exclusively through
+The sender and receiver are modeled as accessing artifacts exclusively through
 standard, user-facing GitHub web URLs (e.g.,
 https://github.com/{owner}/{repo}), as would occur during routine browsing
 activity.
 
 The model does not assume programmatic access via the GitHub REST or GraphQL
-APIs, nor the use of scripted clients, for receiver behavior. Routing semantics
-remain artifact-centric rather than endpoint- or permission-centric.
+APIs, nor the use of scripted clients.
 
 ---
 
