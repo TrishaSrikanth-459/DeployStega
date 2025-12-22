@@ -63,12 +63,12 @@ Artifact access or retrieval—by either sender or receiver—may result in non-
 responses (e.g., 301, 403, 404) due to network conditions, repository evolution,
 permission changes, or platform behavior.
 
-All such outcomes are treated as benign access attempts for logging and
+All such outcomes are treated as access attempts for logging and
 observability purposes, since the access was explicitly initiated by the
-account. Routing semantics depend solely on artifact addressability and access
-attempts, not on retrieval success, response codes, or response contents.
+account. Routing depend solely on access attempts, not on retrieval
+success, response codes, or response contents.
 
-## Receiver Access Mechanism
+## Access Mechanisms
 The sender is modeled as interacting with artifacts through legitimate,
 write-capable interfaces consistent with normal collaborator behavior.
 
@@ -95,9 +95,7 @@ pull requests, commits, and related collaborative artifacts.
 
 ### Identifier Construction Rule
 A repository is uniquely identified by the ordered pair (owner, repo), where 
-owner is the user or organization name and repo is the repostiory name. Both
-fields are case-insensitive and immutable once the repostiory exists, except
-under explicit rename or transfer options.
+owner is the user or organization name and repo is the repostiory name. 
 
 ### Addressability
 1. Retrieves the specified repository
@@ -105,10 +103,18 @@ under explicit rename or transfer options.
    URL: https://github.com/{owner}/{repo}
 
 ### Notes
--The sender operates as a legitimate collaborator within an existing
-repository shared with the receiver. Repository existence is assumed
-as part of the system configuration and is not itself a covert signal.
-Sender-side repository-creation interfaces are therefore out of scope.
+- The sender and receiver are assumed to be collaborators within an existing repository.
+  Repository existence is treated as environmental configuration, not a signaling event.
+- Repository creation, deletion, ownership changes, visibility changes, and other
+  governance- or policy-level operations are excluded because they are rare, high-salience
+  actions not suitable for covert routing.
+- Fork relationships introduce additional metadata but do not change the (owner, repo) identifier.
+- Issue edits (title, body, labels, assignees, lock state, open/closed) do not alter
+  the identifier.
+- Issue transfer to another repository changes the identifier namespace
+  from (owner₁, repo₁, issue_number) to (owner₂, repo₂, issue_number).
+- Issue deletion permanently renders the identifier non-addressable
+  (404/410). Routing is terminated upon deletion.
 
 ---
 
@@ -116,8 +122,7 @@ Sender-side repository-creation interfaces are therefore out of scope.
 
 ### Description
 A GitHub issue represents a tracked unit of work, discussion, or a bug
-report associated with a specific repository. Issues are addressable
-objects exposed via stable numeric identifiers within a repository.
+report associated with a specific repository.
 
 ### Identifier Fields
 - owner: string; not case sensitive
@@ -131,6 +136,7 @@ An issue is uniquely identified by the ordered triple
 - repo is the repository name
 - issue_number is the repository-scoped numeric
   identifier assigned at creation.
+Issue identifiers are repository-scoped and immutable once assigned.
 
 ### Addressability (Sender)
 1. Creates a new issue
@@ -146,11 +152,14 @@ An issue is uniquely identified by the ordered triple
    Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ### Notes
-- GitHub’s REST API treats pull requests as a subtype of issues; issue
-  endpoints may therefore return pull requests. This does not affect
-  identifier structure.
-- Issue transfer between repositories results in a 301 response; deletion may
-  result in 404 or 410 responses depending on viewer permissions.
+- GitHub exposes pull requests through issue endpoints; this affects API
+  responses only, not identifier structure.
+- Locking conversations, modifying labels, changing assignees, or toggling
+  open/closed state do not change the identifier.
+- Issue transfer to another repository changes the identifier namespace
+  from (owner₁, repo₁, issue_number) to (owner₂, repo₂, issue_number).
+- Issue deletion permanently renders the identifier non-addressable.
+  Routing is terminated upon deletion.
 
 ---
 
@@ -171,7 +180,7 @@ A pull request is uniquely identified by the ordered triple
 (owner, repo, pull_number).
 
 The pull_number is assigned at creation time, is unique within
-a repository, and remains stable for the lifetime of the pull
+a repository, and remain stable for the lifetime of the pull
 request.
 
 ### Addressability (Sender)
@@ -190,12 +199,15 @@ request.
    Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
 
 ### Notes
-- Draft status, mergeability state, merge commits, and review outcomes are
-  mutable metadata and are not part of the identifier.
-- Pull requests are distinct from issues, even though GitHub’s API may expose
-  pull requests through issue-related endpoints.
-- Repository transfers or renames preserve pull request identity relative to the
-  updated (owner, repo) namespace.
+- Pull request edits (title, body, draft status), state transitions
+  (open, closed, merged), and branch updates do not alter
+  (owner, repo, pull_number).
+- Repository rename or ownership transfer changes the identifier from
+  (owner₁, repo₁, pull_number) to (owner₂, repo₂, pull_number).
+- Pull request deletion or loss of access renders the identifier
+  non-addressable. Routing is terminated upon deletion.
+- Replies form additional comments with their own identifiers; they do not
+  alter the parent comment’s identity.
 
 ---
 
@@ -216,20 +228,30 @@ A commit is uniquely identified by the ordered tuple
 The commit hash is content-addressed and immutable once created.
 
 ### Addressability (Sender)
-1. 
-   REST API: 
-   URL: 
+Commit creation does not correspond to a distinct, user-visible
+URL at creation time. Instead, commits are side effect of
+sender interactions with file-editing interfaces.
+1. Edit existing file
+   Web URL: https://github.com/{owner}/{repo}/edit/{branch}/{path}
+2. Create new file
+   Web URL: https://github.com/{owner}/{repo}/new/{branch}/{path}
+Submitting changes from these pages triggers an internal form submission
+that creates a new commit and assigns a commit_sha. .
 
 ### Addressability (Receiver)
 1. Access specified commits
    REST API: GET /repos/{owner}/{repo}/commits/{commit_sha}
-   URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
 
 ### Notes
-- Branch membership, pull request association, and comparison relationships
-  are derived metadata and are not part of the identifier.
-- Repository renames or transfers do not alter commit identity relative to the
-  updated (owner, repo) namespace.
+- Commit identifiers (commit_sha) are content-addressed and immutable.
+  No GitHub operation can modify an existing commit’s hash.
+- Branch movement, rebasing, force-pushes, or pull request association
+  changes do not alter the identifier.
+- Repository rename or ownership transfer preserves commit identity under
+  the new namespace (owner₂, repo₂, commit_sha)
+- Commit deletion renders the identifier non-addressable. Routing is terminated
+  upon deletion
 
 ---
 
@@ -256,12 +278,28 @@ All identifier fields are immutable once the comment is created.
 Issue transfers or repository renames preserve the comment’s 
 identity relative to the updated (owner, repo) namespace.
 
-### Addressability
-- REST API: GET /repos/{owner}/{repo}/issues/{issue_number}/comments
-- Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+### Addressability (Sender)
+1. Create an issue comment
+   REST API: POST /repos/{owner}/{repo}/issues/{issue_number}/comments
+   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+2. Edit an existing issue comment
+   REST API: PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
+   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+3. https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+   REST API: DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
+   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+
+### Addressability (Receiver)
+1. Access specified issue comment
+   REST API: GET /repos/{owner}/{repo}/issues/{issue_number}/comments
+   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
 
 ### Notes
-- Issue comments are distinct from pull request review comments.
+- Comment edits do not alter the identifier.
+- Issue or repository transfer preserves comment identity under the updated
+  namespace
+- Comment deletion permanently removes addressability. Routing is
+  terminated upon deletion.
 
 ---
 
@@ -289,14 +327,33 @@ All identifier fields are immutable once the comment is created.
 Repository renames or ownership transfers preserve the comment’s
 identity relative to the updated (owner, repo) namespace.
 
-### Addressability
-- REST API: GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
-- Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
+### Addressability (Sender)
+1. Create a new pull request review comment
+   REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
+   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+2. Reply to an existing pull request review comment
+   REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies
+   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
+3. Edit an existing pull request review comment
+   REST API: PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}
+   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
+4. Delete a pull request review comment
+   REST API: DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}
+   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+  
+### Addressability (Receiver)
+1. Access specified pull request review comments
+   REST API: GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
+   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
 
 ### Notes
-- Pull request review comments are distinct from issue comments.
-- Review comments may be associated with specific commits or diff positions,
-  but these associations are mutable metadata and are not part of the identifier.
+- Edits, replies, resolution status, or review state changes do not alter
+  the identifier.
+- Replies create new comments with distinct identifiers and do not modify
+  the parent comment’s identifier.
+- Repository rename or ownership transfer preserves comment identity under
+  the updated namespace.
+- Deletion permanently removes addressability, Routing is terminated upon deletion.
 
 ---
 
@@ -320,16 +377,27 @@ A commit comment is uniquely identified by the ordered tuple
 The comment_id uniquely identifies the comment within the repository,
 independent of the commit SHA on which it appears.
 
-### Addressability
-- REST API: GET /repos/{owner}/{repo}/comments/{comment_id}
-- Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
+### Addressability (Sender)
+1. Create a new commit comment
+   REST API: POST /repos/{owner}/{repo}/commits/{commit_sha}/comments
+   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+2. Edit an existing commit comment
+   REST API: PATCH /repos/{owner}/{repo}/comments/{comment_id}
+   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
+3. Delete a commit comment
+   REST API: DELETE /repos/{owner}/{repo}/comments/{comment_id}
+   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+
+### Addressability (Receiver)
+1. Access specified commit comments
+   REST API: GET /repos/{owner}/{repo}/comments/{comment_id}
+   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
 
 ### Notes
-- Media-type variants (raw, text, HTML, full) affect only the representation
-  of comment content and do not alter the comment’s identifier.
-- Access to commit comments may require repository metadata read permissions
-  for private repositories
-- A 404 Not Found response may indicate lack of access, deletion, or nonexistence.
+- Comment edits do not alter the identifier.
+- Deletion permanently removes addressability. Routing is terminated upon deletion.
+- Repository rename or ownership transfer preserves comment identity under
+  the updated namespace.
 
 ---
 
