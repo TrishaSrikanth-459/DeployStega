@@ -1,4 +1,4 @@
-# Routing Namespace and Identifier Schemas [Not Done Yet!]
+# Routing Namespace and Identifier Schemas
 
 ## Overview
 This document defines the complete routing namespace used by DeployStega.
@@ -99,13 +99,10 @@ owner is the user or organization name and repo is the repostiory name. Both
 fields are case-insensitive and immutable once the repostiory exists, except
 under explicit rename or transfer options.
 
-### Addressability (Sender)
-- REST API: GET /repos/{owner}/{repo}
-- URL: https://github.com/{owner}/{repo}
-
-### Addressability (Receiver)
-- REST API: GET /repos/{owner}/{repo}
-- URL: https://github.com/{owner}/{repo}
+### Addressability
+1. Retrieves the specified repository
+   REST API: GET /repos/{owner}/{repo}
+   URL: https://github.com/{owner}/{repo}
 
 ### Notes
 -The sender operates as a legitimate collaborator within an existing
@@ -136,17 +133,22 @@ An issue is uniquely identified by the ordered triple
   identifier assigned at creation.
 
 ### Addressability (Sender)
-- REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
-- Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+1. Creates a new issue
+   REST API: POST /repos/{owner}/{repo}/issues
+   Web URL: https://github.com/{owner}/{repo}/issues/new
+2. Modifies mutable fields of an existing issue
+   REST API: PATCH /repos/{owner}/{repo}/issues/{issue_number}
+   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}/edit
 
 ### Addressability (Receiver)
-- REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
-- Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+1. Access specific issues
+   REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
+   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ### Notes
-- GitHub’s REST API treats pull requests as a subtype of issues; thus, issue
-  endpoints may return both issues and pull requests. This distinction does not
-  affect identifier structure.
+- GitHub’s REST API treats pull requests as a subtype of issues; issue
+  endpoints may therefore return pull requests. This does not affect
+  identifier structure.
 - Issue transfer between repositories results in a 301 response; deletion may
   result in 404 or 410 responses depending on viewer permissions.
 
@@ -172,9 +174,20 @@ The pull_number is assigned at creation time, is unique within
 a repository, and remains stable for the lifetime of the pull
 request.
 
-### Addressability
-- REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}
-- Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+### Addressability (Sender)
+1. Creates a new pull request
+   REST API: POST /repos/{owner}/{repo}/pulls  
+   Web URL: https://github.com/{owner}/{repo}/compare
+2. Modifies mutable pull request fields
+   REST API: PATCH /repos/{owner}/{repo}/pulls/{pull_number}  
+   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/edit
+3. Updates the pull request’s head branch
+   REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch  
+   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number} 
+
+### Addressability (Receiver)
+1. REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}
+   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
 
 ### Notes
 - Draft status, mergeability state, merge commits, and review outcomes are
@@ -202,9 +215,15 @@ A commit is uniquely identified by the ordered tuple
 (owner, repo, commit_sha), where commit_sha is the full commit hash
 The commit hash is content-addressed and immutable once created.
 
-### Addressability
-- REST API: GET /repos/{owner}/{repo}/commits/{commit_sha}
-- URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+### Addressability (Sender)
+1. 
+   REST API: 
+   URL: 
+
+### Addressability (Receiver)
+1. Access specified commits
+   REST API: GET /repos/{owner}/{repo}/commits/{commit_sha}
+   URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
 
 ### Notes
 - Branch membership, pull request association, and comparison relationships
