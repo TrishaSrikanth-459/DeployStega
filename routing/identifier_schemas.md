@@ -65,8 +65,7 @@ permission changes, or platform behavior.
 
 All such outcomes are treated as access attempts for logging and
 observability purposes, since the access was explicitly initiated by the
-account. Routing depend solely on access attempts, not on retrieval
-success, response codes, or response contents.
+account. 
 
 ## Access Mechanisms
 The sender is modeled as interacting with artifacts through legitimate,
