@@ -98,8 +98,8 @@ owner is the user or organization name and repo is the repostiory name.
 
 ### Addressability
 1. Retrieves the specified repository
-   REST API: GET /repos/{owner}/{repo}
-   URL: https://github.com/{owner}/{repo}
+  - REST API: GET /repos/{owner}/{repo}
+  - URL: https://github.com/{owner}/{repo}
 
 ### Notes
 - The sender and receiver are assumed to be collaborators within an existing repository.
@@ -139,16 +139,16 @@ Issue identifiers are repository-scoped and immutable once assigned.
 
 ### Addressability (Sender)
 1. Creates a new issue
-   REST API: POST /repos/{owner}/{repo}/issues
-   Web URL: https://github.com/{owner}/{repo}/issues/new
+  - REST API: POST /repos/{owner}/{repo}/issues
+  - Web URL: https://github.com/{owner}/{repo}/issues/new
 2. Modifies mutable fields of an existing issue
-   REST API: PATCH /repos/{owner}/{repo}/issues/{issue_number}
-   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}/edit
+  - REST API: PATCH /repos/{owner}/{repo}/issues/{issue_number}
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}/edit
 
 ### Addressability (Receiver)
 1. Access specific issues
-   REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
-   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+  - REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ### Notes
 - GitHub exposes pull requests through issue endpoints; this affects API
@@ -184,18 +184,18 @@ request.
 
 ### Addressability (Sender)
 1. Creates a new pull request
-   REST API: POST /repos/{owner}/{repo}/pulls  
-   Web URL: https://github.com/{owner}/{repo}/compare
+  - REST API: POST /repos/{owner}/{repo}/pulls  
+  - Web URL: https://github.com/{owner}/{repo}/compare
 2. Modifies mutable pull request fields
-   REST API: PATCH /repos/{owner}/{repo}/pulls/{pull_number}  
-   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/edit
+  - REST API: PATCH /repos/{owner}/{repo}/pulls/{pull_number}  
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/edit
 3. Updates the pull request’s head branch
-   REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch  
-   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number} 
+  - REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch  
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number} 
 
 ### Addressability (Receiver)
 1. REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}
-   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
 
 ### Notes
 - Pull request edits (title, body, draft status), state transitions
@@ -239,8 +239,8 @@ that creates a new commit and assigns a commit_sha. .
 
 ### Addressability (Receiver)
 1. Access specified commits
-   REST API: GET /repos/{owner}/{repo}/commits/{commit_sha}
-   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+  - REST API: GET /repos/{owner}/{repo}/commits/{commit_sha}
+  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
 
 ### Notes
 - Commit identifiers (commit_sha) are content-addressed and immutable.
@@ -279,14 +279,14 @@ identity relative to the updated (owner, repo) namespace.
 
 ### Addressability (Sender)
 1. Create an issue comment
-   REST API: POST /repos/{owner}/{repo}/issues/{issue_number}/comments
-   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+  - REST API: POST /repos/{owner}/{repo}/issues/{issue_number}/comments
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 2. Edit an existing issue comment
-   REST API: PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
-   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+  - REST API: PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
 3. https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
-   REST API: DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
-   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+  - REST API: DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ### Addressability (Receiver)
 1. Access specified issue comment
@@ -328,17 +328,17 @@ identity relative to the updated (owner, repo) namespace.
 
 ### Addressability (Sender)
 1. Create a new pull request review comment
-   REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
-   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+  - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
 2. Reply to an existing pull request review comment
-   REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies
-   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
+  - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
 3. Edit an existing pull request review comment
-   REST API: PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}
-   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
+  - REST API: PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
 4. Delete a pull request review comment
-   REST API: DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}
-   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+  - REST API: DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
   
 ### Addressability (Receiver)
 1. Access specified pull request review comments
@@ -378,19 +378,19 @@ independent of the commit SHA on which it appears.
 
 ### Addressability (Sender)
 1. Create a new commit comment
-   REST API: POST /repos/{owner}/{repo}/commits/{commit_sha}/comments
-   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+  - REST API: POST /repos/{owner}/{repo}/commits/{commit_sha}/comments
+  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
 2. Edit an existing commit comment
-   REST API: PATCH /repos/{owner}/{repo}/comments/{comment_id}
-   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
+  - REST API: PATCH /repos/{owner}/{repo}/comments/{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
 3. Delete a commit comment
-   REST API: DELETE /repos/{owner}/{repo}/comments/{comment_id}
-   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+  - REST API: DELETE /repos/{owner}/{repo}/comments/{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
 
 ### Addressability (Receiver)
 1. Access specified commit comments
-   REST API: GET /repos/{owner}/{repo}/comments/{comment_id}
-   Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
+  - REST API: GET /repos/{owner}/{repo}/comments/{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
 
 ### Notes
 - Comment edits do not alter the identifier.
