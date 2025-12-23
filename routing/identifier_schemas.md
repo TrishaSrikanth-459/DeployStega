@@ -300,7 +300,6 @@ sender interactions with file-editing interfaces.
   - Web URL: https://github.com/{owner}/{repo}/edit/{branch}/{path}
 2. Create new file
   - Web URL: https://github.com/{owner}/{repo}/new/{branch}/{path}
-      -  
 Submitting changes from these pages triggers an internal form submission
 that creates a new commit and assigns a commit_sha. .
 
