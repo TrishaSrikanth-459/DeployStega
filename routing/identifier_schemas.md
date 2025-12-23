@@ -156,7 +156,7 @@ pull requests, commits, and related collaborative artifacts.
 A repository is uniquely identified by the ordered pair (owner, repo), where 
 owner is the user or organization name and repo is the repostiory name. 
 
-### Addressability
+### Addressability (Sender and Receiver)
 1. Retrieves the specified repository
   - REST API: GET /repos/{owner}/{repo}
   - URL: https://github.com/{owner}/{repo}
@@ -288,9 +288,9 @@ Commit creation does not correspond to a distinct, user-visible
 URL at creation time. Instead, commits are side effect of
 sender interactions with file-editing interfaces.
 1. Edit existing file
-   Web URL: https://github.com/{owner}/{repo}/edit/{branch}/{path}
+  - Web URL: https://github.com/{owner}/{repo}/edit/{branch}/{path}
 2. Create new file
-   Web URL: https://github.com/{owner}/{repo}/new/{branch}/{path}
+  - Web URL: https://github.com/{owner}/{repo}/new/{branch}/{path}
 Submitting changes from these pages triggers an internal form submission
 that creates a new commit and assigns a commit_sha. .
 
@@ -347,8 +347,8 @@ identity relative to the updated (owner, repo) namespace.
 
 ### Addressability (Receiver)
 1. Access specified issue comment
-   REST API: GET /repos/{owner}/{repo}/issues/{issue_number}/comments
-   Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+  - REST API: GET /repos/{owner}/{repo}/issues/{issue_number}/comments
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
 
 ### Notes
 - Comment edits do not alter the identifier.
@@ -399,8 +399,8 @@ identity relative to the updated (owner, repo) namespace.
   
 ### Addressability (Receiver)
 1. Access specified pull request review comments
-   REST API: GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
-   Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
+  - REST API: GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
 
 ### Notes
 - Edits, replies, resolution status, or review state changes do not alter
