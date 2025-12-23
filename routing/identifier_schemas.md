@@ -69,64 +69,70 @@ No artifact in the namespace is assumed to be signaling by default.
 
 ## Access-Control Considerations
 
-Identifier definitions are independent of permissions such that
-they specify **how artifacts are named**, not **who can access them**.
-However, **identifier resolvability is permission-dependent**.
+Identifier definitions are independent of permissions such that they specify
+**how artifacts are named**, not **who can access them**.
 
-An identifier may remain syntactically valid while becoming non-resolvable
-to a given actor due to:
-- permission revocation
-- repository visibility changes
-- organization or SSO policy enforcement
+### Experimental Assumption (Permissions)
 
-**Assumption (scope):**
-- Sender and receiver begin with the permissions specified above.
-- Permissions may change over time due to external actions.
-- Permission changes are **not prevented or masked** by the model and are
-  explicitly treated as routing failures when they occur.
+For the scope of the DeployStega experiments, **sender and receiver are assumed
+to retain their initial permissions for the duration of the experiment**.
+Specifically:
+- No permission revocation, role change, repository visibility change,
+  or organization policy change is assumed to occur.
+- All sender-side mutations and receiver-side observations are assumed
+  to be authorized when attempted.
 
-Permissions are modeled as an **external constraint** that may disable
-routing steps by preventing:
-- sender-side mutations (write failure), or
-- receiver-side observation (read failure).
+This assumption is adopted to isolate routing semantics from administrative
+and organizational dynamics, which are orthogonal to the research question
+and infeasible to control systematically at experimental scale.
+
+Permission changes are therefore **out of scope** for the routing model and
+are not treated as part of the evaluated threat or failure surface.
 
 ---
 
 ## Access Failure Handling
 
-Access attempts (sender write-side or receiver read-side) may fail due to
-network conditions, authentication loss, authorization loss,
-repository or artifact evolution, or platform behavior.
+Access attempts (sender write-side or receiver read-side) may, in real-world
+deployments, fail due to network conditions, platform outages, or policy changes.
 
-Failures are treated as **attempt events** for logging and observability
-analysis, but **do not preserve delivery semantics**.
+### Experimental Assumption (Network and Platform Stability)
 
-There is:
-- no assumed feedback channel,
-- no guaranteed retransmission,
-- no sender awareness of receiver-side failure.
+For the purposes of the DeployStega experiments, **network connectivity and
+GitHub platform availability are assumed to be stable**:
+- No adversarial or systematic network failures are injected.
+- No GitHub-wide outages or availability disruptions are modeled.
+- All attempted accesses are assumed to reach the platform successfully.
 
-Failures may therefore result in **irreversible message loss**.
+This assumption is necessary to focus evaluation on **routing feasibility,
+and detectability**, rather than on external reliability
+engineering concerns that are unrelated to covert signaling structure.
+
+### Consequence
+
+Under this assumption:
+- All sender-side actions are assumed to execute successfully.
+- All receiver-side accesses are assumed to resolve successfully.
+
+This does **not** imply that DeployStega guarantees delivery in practice,
+only that delivery failures arising from permissions or network instability
+are explicitly excluded from the experimental scope.
 
 ### Justification for No Retransmission or Feedback
 
-The absence of retransmission and feedback is an intentional design choice
-motivated by real-world covert communication constraints. Reliable delivery
-would require the sender to infer receiver observation or to receive explicit
-acknowledgment, which would introduce detectable coordination, behavioral
-coupling, or an out-of-band signaling channel. Such mechanisms are incompatible
-with the feasible-behavior logs and benign interaction patterns that constrain
-the routing model.
+Even under idealized access conditions, DeployStega does not assume
+retransmission or feedback.
 
-Accordingly, DeployStega models routing as a **best-effort, lossy covert
-channel**, where message loss is absorbed into background platform dynamics
-rather than corrected through retries. Reliability, if desired, must emerge
-from statistical redundancy or encoding strategies external to the routing
-namespace itself, not from reactive retransmission.
+Reliable delivery would require the sender to infer receiver observation
+or to receive explicit acknowledgment, introducing detectable coordination,
+behavioral coupling, or an out-of-band signaling channel. Such mechanisms
+are incompatible with the benign-behavior constraints and feasible-access
+logs that govern our routing model.
 
-Routing semantics are therefore defined over **attempted actions and identifier
-validity**, while delivery reliability under failures is evaluated empirically
-and is **not guaranteed by construction**.
+Accordingly, DeployStega models routing as a **best-effort covert channel**
+even under ideal conditions. Reliability, if required, must arise from
+encoding redundancy or higher-level protocols outside the routing namespace
+itself.
 
 ---
 
@@ -165,12 +171,8 @@ owner is the user or organization name and repo is the repostiory name.
 - The sender and receiver are assumed to be collaborators within an existing repository.
   Repository existence is treated as environmental configuration, not a signaling event.
 - Fork relationships introduce additional metadata but do not change the (owner, repo) identifier.
-- Issue edits (title, body, labels, assignees, lock state, open/closed) do not alter
-  the identifier.
-- Issue transfer to another repository changes the identifier
-  from (owner₁, repo₁, issue_number) to (owner₂, repo₂, issue_number).
-- Issue deletion permanently renders the identifier non-addressable
-  (404/410). Routing is terminated upon deletion.
+- Issue edits, transfers, deletions, repository renames, transfers, or visibility changes
+  are **defined by the platform** but are **assumed not to occur within the experimental scope**.
 
 ---
 
@@ -192,7 +194,6 @@ An issue is uniquely identified by the ordered triple
 - repo is the repository name
 - issue_number is the repository-scoped numeric
   identifier assigned at creation.
-Issue identifiers are repository-scoped and immutable once assigned.
 
 ### Addressability (Sender)
 1. Creates a new issue
@@ -200,7 +201,8 @@ Issue identifiers are repository-scoped and immutable once assigned.
   - Web URL: https://github.com/{owner}/{repo}/issues/new
 2. Modifies mutable fields of an existing issue
   - REST API: PATCH /repos/{owner}/{repo}/issues/{issue_number}
-  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}/edit
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+    - Upon visiting this url, the sender must click the "edit" button on the top right.   
 
 ### Addressability (Receiver)
 1. Access specific issues
@@ -208,14 +210,10 @@ Issue identifiers are repository-scoped and immutable once assigned.
   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ### Notes
-- GitHub exposes pull requests through issue endpoints; this affects API
-  responses only, not identifier structure.
-- Locking conversations, modifying labels, changing assignees, or toggling
-  open/closed state do not change the identifier.
-- Issue transfer to another repository changes the identifier namespace
-  from (owner₁, repo₁, issue_number) to (owner₂, repo₂, issue_number).
-- Issue deletion permanently renders the identifier non-addressable.
-  Routing is terminated upon deletion.
+- Editing issue fields (title, body, labels, assignees, lock state, open/closed)
+  does not change the identifier.
+- Issue transfer or deletion is a platform-defined operation but is **assumed not to occur**
+  within the experimental scope.
 
 ---
 
@@ -230,40 +228,51 @@ with associated discussion and review activity.
 - owner: string; not case sensitive
 - repo: string; not case sensitive
 - pull_number: integer; not case sensitive
+- branch_1: case sensitive
+- branch_2: case sensitive
 
 ### Identifier Construction Rule
 A pull request is uniquely identified by the ordered triple
-(owner, repo, pull_number).
+(owner, repo, pull_number, branch_1, branch_2).
 
 The pull_number is assigned at creation time, is unique within
 a repository, and remain stable for the lifetime of the pull
-request.
+request. The branch_1 and branch_2 fields specifiy the names
+of the branch to merge into and the branch that contains
+one's new changes, respectively. 
 
 ### Addressability (Sender)
 1. Creates a new pull request
   - REST API: POST /repos/{owner}/{repo}/pulls  
-  - Web URL: https://github.com/{owner}/{repo}/compare
+  - Web URL: https://github.com/{owner}/{repo}/compare/branch_1...branch_2
+      - In the URL, the sender must replace all spaces with "-" symbols
+        when referring to branch names
+      - Upon visiting the URL, the sender must click "Create a pull request"
+        and subsequently add a title and description before again clicking
+        "Create a pull request."
 2. Modifies mutable pull request fields
   - REST API: PATCH /repos/{owner}/{repo}/pulls/{pull_number}  
-  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/edit
-3. Updates the pull request’s head branch
-  - REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch  
-  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number} 
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+      - Upon visiting the URL, the sender must click "Edit" to the right
+        of the pull request's title to edit the title; the sender must
+        or click "..." and then "Edit" near the top right of the pull
+        request's body to edit the body.
+3. Merge the pull request into the target branch
+  - REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+      -  Upon visiting the URL, the sender must click "Merge pull
+         request and subsequently type a commit message and
+         extended description before finally clicking "Confirm merge."
 
 ### Addressability (Receiver)
 1. REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}
   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
 
 ### Notes
-- Pull request edits (title, body, draft status), state transitions
-  (open, closed, merged), and branch updates do not alter
-  (owner, repo, pull_number).
-- Repository rename or ownership transfer changes the identifier from
-  (owner₁, repo₁, pull_number) to (owner₂, repo₂, pull_number).
-- Pull request deletion or loss of access renders the identifier
-  non-addressable. Routing is terminated upon deletion.
-- Replies form additional comments with their own identifiers; they do not
-  alter the parent comment’s identifier.
+- Pull request edits, state transitions (draft/open/closed/merged),
+  and branch updates do not alter the identifier.
+- Repository rename, transfer, or pull request deletion are platform-defined
+  but **assumed not to occur during experiments**.
 
 ---
 
@@ -291,6 +300,7 @@ sender interactions with file-editing interfaces.
   - Web URL: https://github.com/{owner}/{repo}/edit/{branch}/{path}
 2. Create new file
   - Web URL: https://github.com/{owner}/{repo}/new/{branch}/{path}
+      -  
 Submitting changes from these pages triggers an internal form submission
 that creates a new commit and assigns a commit_sha. .
 
@@ -300,14 +310,9 @@ that creates a new commit and assigns a commit_sha. .
   - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
 
 ### Notes
-- Commit identifiers (commit_sha) are content-addressed and immutable.
-  No GitHub operation can modify an existing commit’s hash.
-- Branch movement, rebasing, force-pushes, or pull request association
-  changes do not alter the identifier.
-- Repository rename or ownership transfer preserves commit identity under
-  the new namespace (owner₂, repo₂, commit_sha)
-- Commit deletion renders the identifier non-addressable. Routing is terminated
-  upon deletion
+- Branch movement, rebasing, or pull request association do not alter the commit identifier.
+- Repository deletion or garbage collection may affect addressability in practice,
+  but such events are **assumed not to occur within the experimental scope**.
 
 ---
 
@@ -352,10 +357,8 @@ identity relative to the updated (owner, repo) namespace.
 
 ### Notes
 - Comment edits do not alter the identifier.
-- Issue or repository transfer preserves comment identity under the updated
-  namespace
-- Comment deletion permanently removes addressability. Routing is
-  terminated upon deletion.
+- Comment deletion or issue transfer is platform-defined but **assumed not to occur**
+  during the experiment.
 
 ---
 
@@ -403,13 +406,8 @@ identity relative to the updated (owner, repo) namespace.
   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
 
 ### Notes
-- Edits, replies, resolution status, or review state changes do not alter
-  the identifier.
-- Replies create new comments with distinct identifiers and do not modify
-  the parent comment’s identifier.
-- Repository rename or ownership transfer preserves comment identity under
-  the updated namespace.
-- Deletion permanently removes addressability, Routing is terminated upon deletion.
+- Edits, replies, or review state changes do not alter existing identifiers.
+- Deletion or repository transfer is assumed not to occur within scope.
 
 ---
 
@@ -451,8 +449,7 @@ independent of the commit SHA on which it appears.
 
 ### Notes
 - Comment edits do not alter the identifier.
-- Deletion permanently removes addressability. Routing is terminated upon deletion.
-- Repository rename or ownership transfer preserves comment identity under
-  the updated namespace.
+- Deletion or repository transfer is a platform-defined behavior
+  but is **assumed not to occur** within the experimental scope.
 
 ---
