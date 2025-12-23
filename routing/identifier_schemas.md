@@ -8,7 +8,9 @@ by the application and specifies their identifier schemas.
 The namespace is structural only: it specifies what artifacts exist and
 how they are identified, not when or how they are accessed.
 
-## Sender and Receiver Interaction Roles
+---
+
+## Sender and Receiver Interaction Roles (with Initial Permission Assumptions)
 
 The routing namespace enumerates addressable artifact classes independent
 of actor role.
@@ -20,14 +22,36 @@ We distinguish between two interaction roles:
 - **Receiver**: an account that accesses existing artifacts through
   standard, read-only interactions in order to observe information.
 
-Sender and receiver interactions need not use identical API endpoints
-or HTTP methods. Sender actions may create or modify artifacts using
-write-capable interfaces, while receiver actions reference the same
-artifact identifiers through read-only, user-facing access mechanisms
-(e.g., web URLs).
+### Initial Permission Assumption (Explicit)
 
-Routing semantics depend on shared artifact identifiers, not on the
-specific API endpoints, permissions, or HTTP verbs used to access them.
+At experiment start, **both sender and receiver are assumed to be legitimate,
+non-admin collaborators** on the same repository, with the following minimum
+permissions:
+
+- **Sender permissions (write-level collaborator)**  
+  The sender has sufficient permissions to:
+  - create and edit issues
+  - open and edit pull requests
+  - create commits via the GitHub web interface
+  - create, edit, and delete issue comments, pull request review comments,
+    and commit comments  
+
+  The sender is **not** assumed to have repository administrator,
+  organization owner, or policy-management privileges.
+
+- **Receiver permissions (read-level collaborator)**  
+  The receiver has sufficient permissions to:
+  - view the repository
+  - view issues, pull requests, commits, and associated comments
+    via standard web URLs  
+
+  The receiver is **not** assumed to have write or administrative privileges.
+
+Sender and receiver interactions need not use identical API endpoints
+or HTTP methods. Routing semantics depend on shared artifact identifiers,
+not on the specific API endpoints, permissions, or HTTP verbs used to access them.
+
+---
 
 ## Noise and Benign Activity
 
@@ -41,40 +65,97 @@ noise-specific artifacts.
 
 No artifact in the namespace is assumed to be signaling by default.
 
-## Access-control considerations
-Identifier immutability claims are independent of access permissions.
-Repositories and other artifacts may expose different metadata fields depending
-on viewer permissions, but identifier fields remain stable across all access
-levels.
+---
 
-We assume that both sender and receiver possess legitimate access to any
-artifacts referenced for routing, appropriate to their respective roles.
-Specifically:
-- The sender is authorized to create or modify artifacts used for signaling.
-- The receiver is authorized to access (view) those artifacts through
-standard read-side interfaces.
+## Access-Control Considerations
 
-Access-control enforcement is treated as external to the routing model and does
-not affect routing feasibility or detectability, provided that identifier
-addressability is preserved.
+Identifier definitions are independent of permissions such that
+they specify **how artifacts are named**, not **who can access them**.
+However, **identifier resolvability is permission-dependent**.
+
+An identifier may remain syntactically valid while becoming non-resolvable
+to a given actor due to:
+- permission revocation
+- repository visibility changes
+- organization or SSO policy enforcement
+
+**Assumption (scope):**
+- Sender and receiver begin with the permissions specified above.
+- Permissions may change over time due to external actions.
+- Permission changes are **not prevented or masked** by the model and are
+  explicitly treated as routing failures when they occur.
+
+Permissions are modeled as an **external constraint** that may disable
+routing steps by preventing:
+- sender-side mutations (write failure), or
+- receiver-side observation (read failure).
+
+---
 
 ## Access Failure Handling
-Artifact access or retrieval—by either sender or receiver—may result in non-200
-responses (e.g., 301, 403, 404) due to network conditions, repository evolution,
-permission changes, or platform behavior.
 
-All such outcomes are treated as access attempts for logging and
-observability purposes, since the access was explicitly initiated by the
-account. 
+Access attempts (sender write-side or receiver read-side) may fail due to
+network conditions, authentication loss, authorization loss,
+repository or artifact evolution, or platform behavior.
+
+Failures are treated as **attempt events** for logging and observability
+analysis, but **do not preserve delivery semantics**.
+
+There is:
+- no assumed feedback channel,
+- no guaranteed retransmission,
+- no sender awareness of receiver-side failure.
+
+Failures may therefore result in **irreversible message loss**.
+
+### Justification for No Retransmission or Feedback
+
+The absence of retransmission and feedback is an intentional design choice
+motivated by real-world covert communication constraints. Reliable delivery
+would require the sender to infer receiver observation or to receive explicit
+acknowledgment, which would introduce detectable coordination, behavioral
+coupling, or an out-of-band signaling channel. Such mechanisms are incompatible
+with the feasible-behavior logs and benign interaction patterns that constrain
+the routing model.
+
+Accordingly, DeployStega models routing as a **best-effort, lossy covert
+channel**, where message loss is absorbed into background platform dynamics
+rather than corrected through retries. Reliability, if desired, must emerge
+from statistical redundancy or encoding strategies external to the routing
+namespace itself, not from reactive retransmission.
+
+Routing semantics are therefore defined over **attempted actions and identifier
+validity**, while delivery reliability under failures is evaluated empirically
+and is **not guaranteed by construction**.
+
+---
+
+## Failure, Permissions, and Routing Semantics
+
+This model distinguishes **addressability** (an identifier is syntactically
+valid) from **resolvability** (the platform returns the artifact to a given
+actor at a given time).
+
+Routing uses best-effort signaling: the sender encodes stegotext by mutating
+artifacts, and the receiver attempts to resolve those artifacts via standard
+web URLs. There is no feedback channel (no ACK/NACK) and no retransmission.
+
+Sender-side failures prevent artifact materialization.
+Receiver-side failures prevent observation of already-materialized artifacts.
+
+Both cases can result in irreversible message loss.
+
+---
 
 ## Access Mechanisms
-The sender and receiver are modeled as accessing artifacts exclusively through
-standard, user-facing GitHub web URLs (e.g.,
-https://github.com/{owner}/{repo}), as would occur during routine browsing
-activity.
 
-The model does not assume programmatic access via the GitHub REST or GraphQL
-APIs, nor the use of scripted clients.
+The sender and receiver are modeled as accessing artifacts exclusively
+through standard, user-facing GitHub web URLs
+(e.g., `https://github.com/{owner}/{repo}`), as would occur during routine
+browsing activity.
+
+The model does not assume programmatic access via the GitHub REST or
+GraphQL APIs, nor the use of scripted clients.
 
 ---
 
@@ -395,4 +476,3 @@ independent of the commit SHA on which it appears.
   the updated namespace.
 
 ---
-
