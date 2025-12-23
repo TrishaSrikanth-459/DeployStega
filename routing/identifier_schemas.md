@@ -130,23 +130,6 @@ and is **not guaranteed by construction**.
 
 ---
 
-## Failure, Permissions, and Routing Semantics
-
-This model distinguishes **addressability** (an identifier is syntactically
-valid) from **resolvability** (the platform returns the artifact to a given
-actor at a given time).
-
-Routing uses best-effort signaling: the sender encodes stegotext by mutating
-artifacts, and the receiver attempts to resolve those artifacts via standard
-web URLs. There is no feedback channel (no ACK/NACK) and no retransmission.
-
-Sender-side failures prevent artifact materialization.
-Receiver-side failures prevent observation of already-materialized artifacts.
-
-Both cases can result in irreversible message loss.
-
----
-
 ## Access Mechanisms
 
 The sender and receiver are modeled as accessing artifacts exclusively
@@ -181,13 +164,10 @@ owner is the user or organization name and repo is the repostiory name.
 ### Notes
 - The sender and receiver are assumed to be collaborators within an existing repository.
   Repository existence is treated as environmental configuration, not a signaling event.
-- Repository creation, deletion, ownership changes, visibility changes, and other
-  governance- or policy-level operations are excluded because they are rare, high-salience
-  actions not suitable for covert routing.
 - Fork relationships introduce additional metadata but do not change the (owner, repo) identifier.
 - Issue edits (title, body, labels, assignees, lock state, open/closed) do not alter
   the identifier.
-- Issue transfer to another repository changes the identifier namespace
+- Issue transfer to another repository changes the identifier
   from (owner₁, repo₁, issue_number) to (owner₂, repo₂, issue_number).
 - Issue deletion permanently renders the identifier non-addressable
   (404/410). Routing is terminated upon deletion.
@@ -283,7 +263,7 @@ request.
 - Pull request deletion or loss of access renders the identifier
   non-addressable. Routing is terminated upon deletion.
 - Replies form additional comments with their own identifiers; they do not
-  alter the parent comment’s identity.
+  alter the parent comment’s identifier.
 
 ---
 
