@@ -20,6 +20,7 @@ N = {
   PullRequest,
   Commit,
   IssueComment,
+  PullRequestConversationComment,
   PullRequestReviewComment,
   CommitComment
 }
