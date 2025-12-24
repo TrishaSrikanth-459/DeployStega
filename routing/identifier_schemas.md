@@ -150,8 +150,10 @@ pull requests, commits, and related collaborative artifacts.
 - repo: string
 
 ### Identifier Construction Rule
-A repository is uniquely identified by the ordered pair (owner, repo), where 
-owner is the user or organization name and repo is the repostiory name. 
+A repository is uniquely identified by the ordered pair
+(owner, repo), where:
+- owner: The GitHub username or organization name that owns the repository.
+- repo: The repository name within the owner’s namespace.
 
 ### Addressability (Sender and Receiver)
 1. Retrieves the specified repository
@@ -181,11 +183,10 @@ report associated with a specific repository.
 ### Identifier Construction Rule
 An issue is uniquely identified by the ordered triple 
 (owner, repo, issue_number), where:
-- owner is the repository owner (user or organization)
-- repo is the repository name
-- issue_number is the repository-scoped numeric
-  identifier assigned at creation.
-
+- owner: The GitHub user or organization that owns the repository.
+- repo: The repository name in which the issue exists.
+- issue_number: The repository-scoped numeric identifier assigned to the issue at creation time.
+  
 ### Addressability (Sender)
 1. Creates a new issue
   - REST API: POST /repos/{owner}/{repo}/issues
@@ -224,12 +225,12 @@ with associated discussion and review activity.
 
 ### Identifier Construction Rule
 A pull request is uniquely identified by the ordered triple
-(owner, repo, pull_number, branch_1, branch_2).
-
-The pull_number is assigned at creation time and unique within
-a repository. The branch_1 and branch_2 fields specifiy the names
-of the branch to merge into and the branch that contains
-one's new changes, respectively. 
+(owner, repo, pull_number, branch_1, branch_2), where:
+- owner: The GitHub user or organization that owns the repository.
+- repo: The repository name containing the pull request.
+- pull_number: The repository-scoped numeric identifier assigned when the pull request is created.
+- branch_1: The target branch into which changes are proposed to be merged.
+- branch_2: The source branch that contains the proposed changes.
 
 ### Addressability (Sender)
 1. Creates a new pull request
@@ -276,11 +277,17 @@ identified by a cryptographic hash and addressable within a repository.
 - owner: string
 - repo: string
 - branch: string
+- path: string
 - commit_sha: hexadecimal hash
 
 ### Identifier Construction Rule
 A commit is uniquely identified by the ordered tuple
-(owner, repo, branch, commit_sha)
+(owner, repo, branch, path, commit_sha), where:
+- owner: The GitHub user or organization that owns the repository.
+- repo: The repository name in which the commit exists.
+- branch: The branch context under which the commit was created via the web interface.
+- path: The file path being edited or created when the commit is generated.
+- commit_sha: The cryptographic hash that uniquely identifies the commit.
 
 ### Addressability (Sender)
 Commit creation does not correspond to a distinct, user-visible
@@ -320,12 +327,13 @@ code review, debugging, and project coordination.
 - owner: string
 - repo: string
 - issue_number: integer
-- comment_id: integer
 
 ### Identifier Construction Rule
 An issue comment is uniquely identified by the ordered tuple
-(owner, repo, issue_number).
-- issue_number identifies the parent issue within the repository.
+(owner, repo, issue_number), where:
+- owner: The GitHub user or organization that owns the repository.
+- repo: The repository name containing the issue.
+- issue_number: The numeric identifier of the issue to which the comment is attached.
 
 ### Addressability (Sender)
 1. Create an issue comment
@@ -378,9 +386,10 @@ unthreaded.
 
 ### Identifier Construction Rule
 A pull request comment is uniquely identified by the ordered tuple
-(owner, repo, pull_number).
-- owner and repo identify the repository namespace.
-- pull_number identifies the parent pull request within the repository.
+(owner, repo, pull_number), where:
+- owner: The GitHub user or organization that owns the repository.
+- repo: The repository name containing the pull request.
+- pull_number: The numeric identifier of the pull request on which the comment appears.
 
 ### Addressability (Sender)
 1. Create a new pull request conversation comment
@@ -440,14 +449,14 @@ used for code review, clarification, or discussion at the commit level.
 ### Identifier Fields
 - owner: string
 - repo: string
-- comment_id: integer
+- commit_sha: hexadecimal hash
 
 ### Identifier Construction Rule
 A commit comment is uniquely identified by the ordered tuple
 (owner, repo, commit_sha), where:
-- owner is the user or organization name owning the repository
-- repo is the repository name
-- comment_id is a globally unique integer identifier assigned by GitHub
+- owner: The GitHub user or organization that owns the repository.
+- repo: The repository name containing the commit.
+- commit_sha: The cryptographic hash identifying the commit on which the comment appears.
 
 ### Addressability (Sender)
 1. Create a new commit comment
