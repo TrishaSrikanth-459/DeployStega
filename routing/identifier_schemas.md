@@ -44,7 +44,7 @@ permissions:
     via standard web URLs  
 
   The receiver is **not** assumed to have write or administrative privileges.
-  That they may possess such privileges does not, however, invalidate the experiment. 
+  That they may possess write privileges does not, however, invalidate the experiment. 
 
 Sender and receiver interactions need not use identical API endpoints
 or HTTP methods. Routing semantics depend on shared artifact identifiers,
