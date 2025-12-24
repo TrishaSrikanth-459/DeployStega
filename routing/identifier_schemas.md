@@ -298,10 +298,14 @@ URL at creation time. Instead, commits are side effect of
 sender interactions with file-editing interfaces.
 1. Edit existing file
   - Web URL: https://github.com/{owner}/{repo}/edit/{branch}/{path}
+      - Sender must click "Commit changes..." to save their edits.
 2. Create new file
   - Web URL: https://github.com/{owner}/{repo}/new/{branch}/{path}
+      - {path} should not include the new file name; the sender must
+        enter the file's contents and subsequently click "Commit changes..."
+        to save their edits.
 Submitting changes from these pages triggers an internal form submission
-that creates a new commit and assigns a commit_sha. .
+that creates a new commit and assigns a commit_sha.
 
 ### Addressability (Receiver)
 1. Access specified commits
@@ -342,17 +346,25 @@ identity relative to the updated (owner, repo) namespace.
 1. Create an issue comment
   - REST API: POST /repos/{owner}/{repo}/issues/{issue_number}/comments
   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+      - Sender must enter the comment's content in the text box under
+        "Add a comment" and subsequently click "comment" to save
+        their changes.
 2. Edit an existing issue comment
   - REST API: PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
-  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+      - Sender must click "..." near the top-right of the comment's textbox,
+        click "Edit," enter the comment's content, and finally, click
+        "Update comment."
 3. https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
   - REST API: DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
-
+      - Sender must click "..." near the top-right of the comment's textbox,
+        click "Delete," and again, click "Delete."
 ### Addressability (Receiver)
 1. Access specified issue comment
   - REST API: GET /repos/{owner}/{repo}/issues/{issue_number}/comments
   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+      - 
 
 ### Notes
 - Comment edits do not alter the identifier.
