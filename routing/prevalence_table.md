@@ -22,7 +22,7 @@ whether specific users behave suspiciously.
 Artifact prevalence statistics are computed over a fixed, closed historical
 window rather than a rolling or real-time interval.
 
-**Time window:** June 1, 2025 → Jul1 1, 2025
+**Time window:** June 1, 2025 → July 1, 2025
 
 This window was chosen to satisfy the following criteria:
 
