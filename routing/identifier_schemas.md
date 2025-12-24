@@ -11,7 +11,6 @@ how they are identified, not when or how they are accessed.
 ---
 
 ## Sender and Receiver Interaction Roles (with Initial Permission Assumptions)
-
 The routing namespace enumerates addressable artifact classes independent
 of actor role.
 
@@ -23,7 +22,6 @@ We distinguish between two interaction roles:
   standard, read-only interactions in order to observe information.
 
 ### Initial Permission Assumption (Explicit)
-
 At experiment start, **both sender and receiver are assumed to be legitimate,
 non-admin collaborators** on the same repository, with the following minimum
 permissions:
@@ -54,7 +52,6 @@ not on the specific API endpoints, permissions, or HTTP verbs used to access the
 ---
 
 ## Noise and Benign Activity
-
 The routing namespace includes artifact classes that appear in benign
 platform activity regardless of whether they are used for signaling.
 
@@ -68,12 +65,10 @@ No artifact in the namespace is assumed to be signaling by default.
 ---
 
 ## Access-Control Considerations
-
 Identifier definitions are independent of permissions such that they specify
 **how artifacts are named**, not **who can access them**.
 
 ### Experimental Assumption (Permissions)
-
 For the scope of the DeployStega experiments, **sender and receiver are assumed
 to retain their initial permissions for the duration of the experiment**.
 Specifically:
@@ -92,7 +87,6 @@ are not treated as part of the evaluated threat or failure surface.
 ---
 
 ## Access Failure Handling
-
 Access attempts (sender write-side or receiver read-side) may, in real-world
 deployments, fail due to network conditions, platform outages, or policy changes.
 
@@ -109,7 +103,6 @@ and detectability**, rather than on external reliability
 engineering concerns that are unrelated to covert signaling structure.
 
 ### Consequence
-
 Under this assumption:
 - All sender-side actions are assumed to execute successfully.
 - All receiver-side accesses are assumed to resolve successfully.
@@ -119,7 +112,6 @@ only that delivery failures arising from permissions or network instability
 are explicitly excluded from the experimental scope.
 
 ### Justification for No Retransmission or Feedback
-
 Even under idealized access conditions, DeployStega does not assume
 retransmission or feedback.
 
@@ -137,7 +129,6 @@ itself.
 ---
 
 ## Access Mechanisms
-
 The sender and receiver are modeled as accessing artifacts exclusively
 through standard, user-facing GitHub web URLs
 (e.g., `https://github.com/{owner}/{repo}`), as would occur during routine
@@ -155,8 +146,8 @@ A GitHub repository is the top-level container for source code, issues,
 pull requests, commits, and related collaborative artifacts.
 
 ### Identifier Fields
-- owner: string; not case sensitive
-- repo: string; not case sensitive.
+- owner: string
+- repo: string
 
 ### Identifier Construction Rule
 A repository is uniquely identified by the ordered pair (owner, repo), where 
@@ -183,8 +174,8 @@ A GitHub issue represents a tracked unit of work, discussion, or a bug
 report associated with a specific repository.
 
 ### Identifier Fields
-- owner: string; not case sensitive
-- repo: string; not case sensitive
+- owner: string
+- repo: string
 - issue_number: integer
 
 ### Identifier Construction Rule
@@ -225,26 +216,25 @@ a source branch into a target branch within a repository, along
 with associated discussion and review activity.
 
 ### Identifier Fields
-- owner: string; not case sensitive
-- repo: string; not case sensitive
-- pull_number: integer; not case sensitive
-- branch_1: case sensitive
-- branch_2: case sensitive
+- owner: string
+- repo: string
+- pull_number: integer
+- branch_1: string
+- branch_2: string
 
 ### Identifier Construction Rule
 A pull request is uniquely identified by the ordered triple
 (owner, repo, pull_number, branch_1, branch_2).
 
-The pull_number is assigned at creation time, is unique within
-a repository, and remain stable for the lifetime of the pull
-request. The branch_1 and branch_2 fields specifiy the names
+The pull_number is assigned at creation time and unique within
+a repository. The branch_1 and branch_2 fields specifiy the names
 of the branch to merge into and the branch that contains
 one's new changes, respectively. 
 
 ### Addressability (Sender)
 1. Creates a new pull request
   - REST API: POST /repos/{owner}/{repo}/pulls  
-  - Web URL: https://github.com/{owner}/{repo}/compare/branch_1...branch_2
+  - Web URL: https://github.com/{owner}/{repo}/compare/{branch_1}...{branch_2}
       - In the URL, the sender must replace all spaces with "-" symbols
         when referring to branch names
       - Upon visiting the URL, the sender must click "Create a pull request"
@@ -283,14 +273,14 @@ A GitHub commit represents a single immutable snapshot of repository state,
 identified by a cryptographic hash and addressable within a repository.
 
 ### Identifier Fields
-- owner: string; not case sensitive
-- repo: string; not case sensitive
-- commit_sha: hexadecimal hash; case sensitive
+- owner: string
+- repo: string
+- branch: string
+- commit_sha: hexadecimal hash
 
 ### Identifier Construction Rule
 A commit is uniquely identified by the ordered tuple
-(owner, repo, commit_sha), where commit_sha is the full commit hash
-The commit hash is content-addressed and immutable once created.
+(owner, repo, branch, commit_sha)
 
 ### Addressability (Sender)
 Commit creation does not correspond to a distinct, user-visible
@@ -327,20 +317,15 @@ within a GitHub repository. Issue comments are routinely accessed during
 code review, debugging, and project coordination.
 
 ### Identifier Fields
-- owner: string; not case sensitive
-- repo: string; not case sensitive
+- owner: string
+- repo: string
 - issue_number: integer
 - comment_id: integer
 
 ### Identifier Construction Rule
 An issue comment is uniquely identified by the ordered tuple
-(owner, repo, issue_number, comment_id).
+(owner, repo, issue_number).
 - issue_number identifies the parent issue within the repository.
-- comment_id identifies the specific comment within that issue.
-
-All identifier fields are immutable once the comment is created.
-Issue transfers or repository renames preserve the comment’s 
-identity relative to the updated (owner, repo) namespace.
 
 ### Addressability (Sender)
 1. Create an issue comment
@@ -355,7 +340,7 @@ identity relative to the updated (owner, repo) namespace.
       - Sender must click "..." near the top-right of the comment's textbox,
         click "Edit," enter the comment's content, and finally, click
         "Update comment."
-3. https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
+3. Delete an existing issue comment
   - REST API: DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}
   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
       - Sender must click "..." near the top-right of the comment's textbox,
@@ -363,8 +348,8 @@ identity relative to the updated (owner, repo) namespace.
 ### Addressability (Receiver)
 1. Access specified issue comment
   - REST API: GET /repos/{owner}/{repo}/issues/{issue_number}/comments
-  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-{comment_id}
-      - 
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+      - Reciever must scroll down to the desired comment under the specified issue. 
 
 ### Notes
 - Comment edits do not alter the identifier.
@@ -373,48 +358,72 @@ identity relative to the updated (owner, repo) namespace.
 
 ---
 
-## Artifact Class: Pull Request Review Comments
+## Artifact Class: Pull Request Review/Conversation Comments
 
 ### Description
 A PullRequestReviewComment is a user-authored comment
-attached to a specific pull request, typically associated
-with a code diff or review discussion. These comments
-are routinely accessed during code review workflows.
+posted in the "Files changed" tab of a GitHub pull request,
+typically associated with a code diff or review discussion.
+These comments are routinely accessed during code review workflows.
+
+A PullRequestConversationComment is a top-level, user-authored
+comment posted in the "Conversation" tab of a GitHub pull request,
+not associated with a specific code line or diff. These comments are
+unthreaded.
 
 ### Identifier Fields
-- owner: string; not case sensitive
-- repo: string; not case sensitive
+- owner: string
+- repo: string
 - pull_number: integer
-- comment_id: integer
 
 ### Identifier Construction Rule
-A pull request review comment is uniquely identified by the ordered tuple
-(owner, repo, pull_number, comment_id).
+A pull request comment is uniquely identified by the ordered tuple
+(owner, repo, pull_number).
 - owner and repo identify the repository namespace.
 - pull_number identifies the parent pull request within the repository.
-- comment_id identifies the specific review comment.
-All identifier fields are immutable once the comment is created.
-Repository renames or ownership transfers preserve the comment’s
-identity relative to the updated (owner, repo) namespace.
 
 ### Addressability (Sender)
-1. Create a new pull request review comment
-  - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
+1. Create a new pull request conversation comment
   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
-2. Reply to an existing pull request review comment
+      - Sender must scroll down to the text box under "Add a comment,"
+        enter the comment's contents, and finally, click "comment.
+2. Edit an existing pull request conversation commetn
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+      - Sender must click "..." near the top right of the text box
+        of the comment, click "Edit," enter the desired edits in the
+        newly appeared text box, and finally, click "Update comment."
+3. Create a new pull request review comment
+  - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
+      - Sender must hover over "+" to the left of the specific change
+        they wish to comment on, enter the comment's contents in the
+        newly appeared text box, and finally, click "Add review comment."
+4. Reply to an existing pull request review comment
   - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies
-  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
-3. Edit an existing pull request review comment
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
+      - Sender must enter the reply's comments in the textbox underneath the comment
+        they wish to reply to, and finally, click "Add review comment."
+5. Edit an existing pull request review comment
   - REST API: PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}
-  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
-4. Delete a pull request review comment
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
+      - Sender must click "..." near the top right of the text box
+        of the comment, click "Edit," enter the desired edits in the
+        newly appeared text box, and finally, click "Update comment."
+6. Delete a pull request review comment
   - REST API: DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}
   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+      - Sender must click "..." near the top right of the text box
+        of the comment, click "Delete," and finally, click "Ok."
   
 ### Addressability (Receiver)
-1. Access specified pull request review comments
+1. Access specified pull request conversation comments
+   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+       - Reciever must scroll down to the desired comment on this page. 
+3. Access specified pull request review comments
   - REST API: GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
-  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}#discussion_r{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
+      - Reciever must scroll down to the desired comment to the left
+        of this page.
 
 ### Notes
 - Edits, replies, or review state changes do not alter existing identifiers.
@@ -429,34 +438,46 @@ A commit comment is a user-authored comment attached to a specific commit,
 used for code review, clarification, or discussion at the commit level.
 
 ### Identifier Fields
-- owner: string; not case sensitive
-- repo: string; not case sensitive
+- owner: string
+- repo: string
 - comment_id: integer
 
 ### Identifier Construction Rule
 A commit comment is uniquely identified by the ordered tuple
-(owner, repo, comment_id), where:
+(owner, repo, commit_sha), where:
 - owner is the user or organization name owning the repository
 - repo is the repository name
 - comment_id is a globally unique integer identifier assigned by GitHub
-The comment_id uniquely identifies the comment within the repository,
-independent of the commit SHA on which it appears.
 
 ### Addressability (Sender)
 1. Create a new commit comment
   - REST API: POST /repos/{owner}/{repo}/commits/{commit_sha}/comments
   - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+      -  Sender must either 1) enter the comment's content in the textbox underneath
+         "Comments," and finally, click "Comment" or 2) hover over "+" to the left
+         of a specific commit line, enter the comment's contents in the newly
+         appeared text box, and finally, click "Comment."
 2. Edit an existing commit comment
   - REST API: PATCH /repos/{owner}/{repo}/comments/{comment_id}
-  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+      - Sender must click "..." near the top right of the comment's
+        text box, click "Edit," enter the desired edits, and finally,
+        click "Update comment." They may do so for either a general comment
+        or a line-specific comment. 
 3. Delete a commit comment
   - REST API: DELETE /repos/{owner}/{repo}/comments/{comment_id}
   - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+      -  Sender must click "..." near the top right of the comment's
+        text box and click "Delete." They will need to click "Delete"
+        an additional time if they are deleting a line-specific
+        comment. 
 
 ### Addressability (Receiver)
 1. Access specified commit comments
   - REST API: GET /repos/{owner}/{repo}/comments/{comment_id}
-  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}#commitcomment-{comment_id}
+  - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+      -  Receiver must scroll down to the desired comment on the
+         page. 
 
 ### Notes
 - Comment edits do not alter the identifier.
