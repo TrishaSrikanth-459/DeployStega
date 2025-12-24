@@ -22,7 +22,7 @@ whether specific users behave suspiciously.
 Artifact prevalence statistics are computed over a fixed, closed historical
 window rather than a rolling or real-time interval.
 
-**Time window:** June 1, 2025 → August 31, 2025
+**Time window:** June 1, 2025 → Jul1 1, 2025
 
 This window was chosen to satisfy the following criteria:
 
@@ -30,7 +30,7 @@ This window was chosen to satisfy the following criteria:
   collaborative development workflows.
 - The interval is fully completed, avoiding partial ingestion, delayed
   event reporting, or incomplete hourly archives.
-- The three-month duration is sufficient to smooth short-term fluctuations
+- The one-month duration is sufficient to smooth short-term fluctuations
   in activity while remaining focused on structural artifact prevalence
   rather than long-term platform evolution.
 - Using a fixed historical window ensures reproducibility and prevents
@@ -125,9 +125,6 @@ Normalized prevalence computed as:
 
 raw_count / total_raw_count_across_all_classes
 
-yaml
-Copy code
-
 Relative frequencies sum to 1.0 across all artifact classes.
 
 ### Notes (optional)
@@ -141,15 +138,9 @@ Let:
 
 Total = Σ (raw counts across all artifact classes)
 
-perl
-Copy code
-
 For each artifact class:
 
 relative_frequency = raw_count / Total
-
-yaml
-Copy code
 
 ---
 
