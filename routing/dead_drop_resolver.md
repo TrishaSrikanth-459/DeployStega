@@ -2,66 +2,101 @@
 
 ## Purpose
 
-This module specifies the **deterministic resolution mechanism** that maps a shared cryptographic digest to a concrete, addressable GitHub artifact identifier at a given epoch. Its sole purpose is to ensure that both sender and receiver independently compute the *same artifact reference* using shared inputs, without coordination, feedback, or state. The resolver operates strictly at the level of namespace structure and identifier construction, and explicitly excludes payload encoding, behavioral modeling, timing control, access execution, or observation logic.
+This module specifies the **deterministic dead-drop routing function**
+that maps shared cryptographic inputs to a *concrete, existing GitHub
+artifact identifier* and a *role-specific URL* at a given epoch `t`.
+
+The resolver guarantees that sender and receiver independently derive
+**the same artifact identifier** while resolving it to **different,
+role-appropriate URLs** that reflect statistically benign behavior.
+Routing is defined structurally, not behaviorally: this module specifies
+*what* is referenced, not *when* or *how often* it is accessed.
 
 ---
 
 ## Scope and Non-Goals
 
 ### In Scope
-- Deterministic mapping from a shared digest to:
+- Deterministic mapping from shared inputs to:
   - a GitHub artifact class
-  - a valid identifier tuple within that class
-- Enforcement of artifact-specific identifier formats
-- Canonical GitHub URL construction from identifiers
-- Deterministic handling of collisions and invalid identifiers
-- Structural plausibility guarantees (existence, format, stability)
+  - an **existing identifier tuple** within a fixed repository snapshot
+- Role-specific URL resolution (sender vs. receiver)
 
 ### Out of Scope
 - Payload encoding or decoding
-- Behavioral timing, jitter, batching, or scheduling
-- Network access, authentication, or permission checks
-- Artifact creation, mutation, or deletion
+- Behavioral timing, ordering, or scheduling
+- Network access, permissions, or platform responses
 - Retransmission, acknowledgment, or delivery guarantees
-- Any form of adaptive or stateful routing logic
+- Modeling adversarial interference or repository evolution
+
+---
+
+## Fixed Repository Snapshot Assumption
+
+This resolver operates relative to a **fixed repository snapshot**
+exchanged out-of-band between sender and receiver prior to the experiment.
+
+The snapshot defines:
+- the repository identity (`owner`, `repo`)
+- the set of artifact classes considered routable
+- the set of **existing identifiers** eligible for routing
+- empirically observed identifier bounds and distributions
+
+### Assumption
+
+After snapshot exchange:
+
+- **No external actor mutates the repository** in a way that affects:
+  - artifact existence
+  - identifier stability
+  - namespace structure
+- Specifically, no issues, pull requests, commits, discussions, or
+  comments referenced by the resolver are deleted, renumbered, edited, or
+  transferred during the experiment by an external actor. 
+
+This assumption is adopted to:
+- prevent silent message loss due to external interference
+- avoid introducing the need for live state queries that would appear in logs
+- isolate routing detectability from availability failures
+
+If this assumption is violated in a real deployment, routing correctness
+is not guaranteed. This tradeoff is accepted to enable controlled,
+measurable detectability experiments.
 
 ---
 
 ## Inputs
 
-The resolver requires the following inputs:
+All inputs are agreed upon out-of-band:
 
-- **Epoch value `t`**  
-  A shared, discrete time index agreed upon out-of-band.
+- **Epoch `t`**  
+  A shared, discrete epoch index.
 
 - **Sender identifier `senderID`**  
-  A stable identifier for the sender account.
+  A stable identifier for the sender.
 
 - **Receiver identifier `receiverID`**  
-  A stable identifier for the receiver account.
+  A stable identifier for the receiver.
 
-- **Shared repository identifier `repoId`**  
-  A fixed configuration parameter identifying the collaborative repository.
-  This value is *not* derived from the digest.
-
-- **Routing namespace `N`**  
-  An ordered set of GitHub artifact classes shared by sender and receiver.
-
-- **Per-class bounds**  
-  Upper bounds `MaxFₖ(repoId)` for each numeric identifier field required by
-  an artifact class, derived from empirical metadata.
+- **Repository snapshot configuration**
+  - repository owner and name
+  - artifact-class namespace `N`
+  - list of existing identifiers per class
+  - empirical identifier bounds and frequencies
 
 ---
 
 ## Outputs
 
-The resolver outputs:
+At epoch `t`, the resolver outputs:
 
-- **Artifact class `C ∈ N`**
-- **Identifier tuple** matching the schema of `C`
-- **Canonical GitHub URL** corresponding to the identifier tuple
+- an artifact class `C ∈ N`
+- a **concrete identifier tuple that exists in the snapshot**
+- a **role-specific canonical GitHub URL**
 
-The output uniquely specifies a single GitHub artifact reference for epoch `t`.
+Routing is defined over the tuple:
+
+Route(t, role) = (artifactClass, identifierTuple, URL_role)
 
 ---
 
@@ -69,23 +104,23 @@ The output uniquely specifies a single GitHub artifact reference for epoch `t`.
 
 ### PRNG Selection
 
-The resolver uses a **cryptographic hash function** `H` as its deterministic
-pseudo-random generator. A cryptographic hash is chosen to ensure:
-- uniform distribution over the namespace
-- resistance to bias or correlation
-- deterministic reproducibility across parties
+The resolver uses a deterministic pseudo-random generator derived from a
+cryptographic hash function `H`, chosen for:
+
+- reproducibility
+- uniformity over identifier space
+- independence across epochs
+
+The PRNG is used **only to select among snapshot-defined possibilities**,
+never to invent identifiers.
 
 ### PRNG Interface
 
-The PRNG interface is defined as:
+The shared digest is computed as:
 
 digest = H(t, senderID, receiverID)
 
-yaml
-Copy code
-
-The output `digest` is a fixed-length byte string. All subsequent resolution
-steps operate exclusively on slices of this digest.
+All routing decisions are derived from fixed slices of this digest.
 
 ---
 
@@ -93,110 +128,87 @@ steps operate exclusively on slices of this digest.
 
 ### Artifact Class Selection
 
-Artifact class selection uses the first 8 bytes of the digest:
+The first slice of the digest selects an artifact class:
 
-index = int(digest[0:8]) mod |N|
-artifactClass = N[index]
+classIndex = int(digest[0:8]) mod |N|
+artifactClass = N[classIndex]
 
-python
-Copy code
+This indexing applies **only** to the fixed, agreed-upon class set `N`.
 
-This selects a class uniformly from the routing namespace. Importantly, this
-index selects **only the artifact class**, not the repository.
+---
 
-### Identifier Field Allocation
+### Identifier Selection Within Snapshot
 
-The remaining digest bytes are partitioned into fixed slices:
+For the selected artifact class:
 
-primary = int(digest[8:16])
-secondary = int(digest[16:24])
-tertiary = int(digest[24:32])
+1. Let `S_C` be the snapshot-defined set of existing identifiers
+   for class `C`.
+2. The resolver deterministically selects **one identifier from `S_C`**
+   using digest-derived values.
+3. Selection is stable across sender and receiver.
 
-vbnet
-Copy code
+This guarantees that **every resolved identifier exists** and is
+addressable for the duration of the experiment.
 
-These slices are mapped to identifier fields depending on the arity of the
-selected artifact class:
+---
 
-- **One field**:
-f1 = (primary mod MaxF1(repoId)) + 1
+## Sender vs. Receiver URL Resolution
 
-markdown
-Copy code
-- **Two fields**:
-f1 = (primary mod MaxF1(repoId)) + 1
-f2 = (secondary mod MaxF2(repoId)) + 1
+Although sender and receiver resolve the **same identifier tuple** at
+epoch `t`, they intentionally resolve it to **different URLs**.
 
-markdown
-Copy code
-- **Three fields**:
-f1 = (primary mod MaxF1(repoId)) + 1
-f2 = (secondary mod MaxF2(repoId)) + 1
-f3 = (tertiary mod MaxF3(repoId)) + 1
+- The **sender** resolves the identifier to a URL that supports
+  *benign mutation* (e.g., create, edit, reply, or update).
+- The **receiver** resolves the same identifier to a URL that supports
+  *benign observation* (e.g., view, scroll, or read).
 
-yaml
-Copy code
-
-The final identifier tuple prepends the fixed `repoId`.
-
-### Identifier Constraints
-
-All identifiers must:
-- conform to the schema defined in `identifier_schemas.md`
-- lie within empirically observed bounds
-- respect GitHub’s identifier typing (numeric IDs or commit SHAs)
-
-Identifiers failing these constraints are treated as invalid.
+This asymmetry is essential: routing agreement occurs at the identifier
+level, while **behavioral realism is enforced at the URL level**.
 
 ---
 
 ## Canonical URL Construction
 
-Each identifier tuple is converted into a **canonical GitHub web URL**
-using fixed, publicly documented URL templates.
+Identifier tuples are converted into canonical GitHub URLs using fixed,
+public templates.
 
 Examples:
-- Issues:  
-`https://github.com/{owner}/{repo}/issues/{issueNumber}`
-- Issue comments:  
-`https://github.com/{owner}/{repo}/issues/{issueNumber}#issuecomment-{commentId}`
-- Pull requests:  
-`https://github.com/{owner}/{repo}/pull/{prNumber}`
-- Commits:  
-`https://github.com/{owner}/{repo}/commit/{commitSha}`
-- Discussion comments:  
-`https://github.com/{owner}/{repo}/discussions/{discussionNumber}?commentId={commentId}`
 
-URL construction is purely syntactic and does not perform resolution.
+- Issues:  
+  `https://github.com/{owner}/{repo}/issues/new`
+  
+- Issue comments:  
+  ` https://github.com/{owner}/{repo}/issues/{issue_number}`
+
+- Pull requests:  
+  `https://github.com/{owner}/{repo}/pull/{pull_number}`
+
+- Commits:  
+  `https://github.com/{owner}/{repo}/edit/{branch}/{path}`
+
+### Behavioral Dependence of URL Selection
+
+The **specific URL chosen** is as important as the identifier itself.
+The same identifier may admit multiple valid URLs corresponding to
+distinct behaviors (viewing, editing, replying, or creating).
+
+Both sender-side and receiver-side URL selection are constrained by
+**statistical distributions of benign behavior** derived from empirical
+datasets. Final routing is therefore defined by the pair:
+
+(identifierTuple, URL_role),
+
+not by the identifier alone.
 
 ---
 
 ## Collision Handling
 
-### Collision Definition
+A collision occurs if a digest-derived selection maps to an identifier
+that is invalid or unavailable within the snapshot.
 
-A collision occurs when:
-- two distinct epochs resolve to the same `(artifactClass, identifier tuple)`
-under identical repository configuration.
-
-### Collision Resolution Strategy
-
-Collisions are handled deterministically by:
-- incorporating epoch `t` into the hash input, and
-- relying on the cryptographic hash’s avalanche properties.
-
-No state, memory, or coordination is used to resolve collisions.
-
----
-
-## Invalid Identifier Handling
-
-If an identifier tuple fails validation (e.g., out of bounds):
-- the resolver advances deterministically to the next digest slice
-(or re-hashes with a fixed salt)
-- the resolution process repeats until a valid identifier is produced
-
-This procedure is deterministic and identical for sender and receiver.
+Collisions are resolved deterministically by applying a fixed rehashing
+rule until a valid, existing identifier is selected.
 
 ---
 
@@ -204,72 +216,6 @@ This procedure is deterministic and identical for sender and receiver.
 
 The resolver exposes a single pure function:
 
-ResolveDeadDrop(t, senderID, receiverID, repoId) → {
-artifactClass,
-identifierTuple,
-canonicalURL
-}
+ResolveDeadDrop(t, senderID, receiverID, role)
+→ { artifactClass, identifierTuple, canonicalURL }
 
-yaml
-Copy code
-
-The function is stateless and side-effect free.
-
----
-
-## Determinism Guarantees
-
-The resolver guarantees that:
-- identical inputs always produce identical outputs
-- no external state influences resolution
-- resolution is independent of network conditions, permissions, or timing
-
-Determinism holds across executions, machines, and parties.
-
----
-
-## Routing Correctness Tests
-
-Correctness is verified by:
-- replay tests over fixed `(t, senderID, receiverID)` tuples
-- cross-party consistency checks
-- schema validation against `identifier_schemas.md`
-- bounds checking using `prevalence_table.md`
-
----
-
-## Plausibility Checks (Structural Only)
-
-Plausibility is evaluated by ensuring:
-- all artifact classes appear in the benign dataset `D`
-- identifier formats match those observed in GitHub APIs
-- identifier ranges are empirically grounded
-
-No behavioral or temporal plausibility is assessed here.
-
----
-
-## Assumptions and Limitations
-
-**Assumptions**
-- Sender and receiver share inputs out-of-band
-- Repository configuration is fixed
-- Permissions and network conditions are ideal
-- Namespace and schemas are consistent across parties
-
-**Limitations**
-- No delivery guarantees
-- No adaptation to repository evolution
-- No detection or correction of access failures
-- No payload awareness
-
----
-
-## Summary
-
-The deterministic dead-drop resolver provides a reproducible, stateless mapping
-from shared cryptographic inputs to concrete GitHub artifact references. It
-guarantees consistency, structural validity, and plausibility within the routing
-namespace, while deliberately excluding behavior, access, timing, and payload
-semantics. As such, it forms the core structural routing primitive upon which
-higher-layer encoding and observation mechanisms may safely operate.
