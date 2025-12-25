@@ -258,7 +258,8 @@ A pull request is uniquely identified by the ordered tuple
        - In the URL, the sender must replace all spaces with "-" symbols when referring to branch names. Upon visiting the URL, the sender must click "Create a pull request" and subsequently add a title and description before again clicking "Create a pull request."
 2. Modifies mutable pull request fields
    - REST API: PATCH /repos/{owner}/{repo}/pulls/{pull_number}
-   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number} - Upon visiting the URL, the sender must click "Edit" to the right of the pull request's title to edit the title; the sender must or click "..." and then "Edit" near the top right of the pull request's body to edit the body.
+   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+       - Upon visiting the URL, the sender must click "Edit" to the right of the pull request's title to edit the title; the sender must or click "..." and then "Edit" near the top right of the pull request's body to edit the body.
 3. Merge the pull request into the target branch
    - REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
