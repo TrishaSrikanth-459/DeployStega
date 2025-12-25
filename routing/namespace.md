@@ -278,7 +278,7 @@ A pull request is uniquely identified by the ordered tuple
 
 ---
 
-## Artifact Class: Commits
+## Artifact Class: Commit
 
 ### Description
 A GitHub commit represents a single immutable snapshot of repository state,
@@ -320,7 +320,7 @@ Commit creation does not correspond to a distinct, user-visible URL at creation 
 
 ---
 
-## Artifact Class: Issue comments
+## Artifact Class: IssueComment
 
 ### Description
 An IssueComment is a user-authored comment attached to a specific issue
@@ -362,7 +362,7 @@ An issue comment is uniquely identified by the ordered tuple
 
 ---
 
-## Artifact Class: Pull Request Review/Conversation Comments
+## Artifact Class: PullRequestComment
 
 ### Description
 User-authored comments associated with a pull request, either in the
