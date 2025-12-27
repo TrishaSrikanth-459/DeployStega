@@ -177,11 +177,11 @@ This indexing applies **only** to the fixed artifact-class namespace `N`.
 
 Subsequent, non-overlapping slices of the digest are used to populate identifier fields.
 
-primary = int(digest[ 8:16])
-secondary = int(digest[16:24])
-tertiary = int(digest[24:32])
-quaternary = int(digest[32:40])
-quinary = int(digest[40:48])
+- primary = int(digest[ 8:16])
+- secondary = int(digest[16:24])
+- tertiary = int(digest[24:32])
+- quaternary = int(digest[32:40])
+- quinary = int(digest[40:48])
 
 Slices are assigned in order according to the identifier schema of the selected artifact class.
 
