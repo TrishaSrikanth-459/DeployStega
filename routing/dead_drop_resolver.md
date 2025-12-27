@@ -2,87 +2,124 @@
 
 ## Purpose
 
-This module specifies the **deterministic dead-drop routing function**
-that maps shared cryptographic inputs to a *concrete, existing GitHub
-artifact identifier* and a *role-specific URL* at a given epoch `t`.
+This module specifies the **deterministic dead-drop routing function** used by DeployStega.  
+The resolver maps shared cryptographic inputs and pre-established experimental artifacts to a **concrete, existing GitHub artifact identifier** and a **role-specific URL** at a given epoch `t`.
 
-The resolver guarantees that sender and receiver independently derive
-**the same artifact identifier** while resolving it to **different,
-role-appropriate URLs** that reflect statistically benign behavior.
-Routing is defined structurally, not behaviorally: this module specifies
-*what* is referenced, not *when* or *how often* it is accessed.
+The resolver guarantees that sender and receiver independently derive:
+
+- the **same artifact identifier tuple**, and  
+- **different, role-appropriate URLs** (mutation vs. observation),
+
+while ensuring that all resolved actions and URLs are **behaviorally feasible** under empirically learned benign GitHub interaction traces.
+
+The resolver performs **no behavioral scheduling, network access, or live state queries**. It is a pure, deterministic function evaluated within externally supplied feasibility constraints.
 
 ---
 
 ## Scope and Non-Goals
 
 ### In Scope
-- Deterministic mapping from shared inputs to:
+- Deterministic resolution from shared inputs to:
   - a GitHub artifact class
-  - an **existing identifier tuple** within a fixed repository snapshot
+  - an **existing identifier tuple** drawn from a fixed repository snapshot
+- Deterministic slicing of a shared digest into identifier fields
 - Role-specific URL resolution (sender vs. receiver)
+- Enforcement of structural and behavioral feasibility constraints at resolution time
 
 ### Out of Scope
 - Payload encoding or decoding
-- Behavioral timing, ordering, or scheduling
-- Network access, permissions, or platform responses
+- Behavioral timing generation or session scheduling
+- Network access, permissions, or API calls
 - Retransmission, acknowledgment, or delivery guarantees
-- Modeling adversarial interference or repository evolution
+- Modeling repository evolution or adversarial interference during execution
 
 ---
 
 ## Fixed Repository Snapshot Assumption
 
-This resolver operates relative to a **fixed repository snapshot**
-exchanged out-of-band between sender and receiver prior to the experiment.
+The resolver operates relative to a **fixed repository snapshot** established *prior to the experiment*.
+
+The snapshot is used **only during construction of the resolver**, not exchanged dynamically and not accessed at runtime.
 
 The snapshot defines:
-- the repository identity (`owner`, `repo`)
-- the set of artifact classes considered routable
-- the set of **existing identifiers** eligible for routing
-- empirically observed identifier bounds and distributions
+- repository identity (`owner`, `repo`)
+- the routing namespace `N` (artifact classes)
+- the **set of existing artifact identifiers** per class
+- stable identifier schemas
+- empirical identifier bounds and frequencies
 
-### Assumption
+### Snapshot Integrity Assumption
 
-After snapshot exchange:
+After the snapshot is fixed:
 
-- **No external actor mutates the repository** in a way that affects:
+- No external actor mutates the repository in a way that affects:
   - artifact existence
   - identifier stability
   - namespace structure
-- Specifically, no issues, pull requests, commits, discussions, or
-  comments referenced by the resolver are deleted, renumbered, edited, or
-  transferred during the experiment by an external actor. 
+- Specifically, artifacts referenced by the resolver are not deleted, transferred, renumbered, or rewritten by third parties during the experiment.
 
 This assumption is adopted to:
-- prevent silent message loss due to external interference
-- avoid introducing the need for live state queries that would appear in logs
-- isolate routing detectability from availability failures
+- prevent silent message loss unrelated to detectability,
+- avoid live repository queries that would introduce observable log artifacts,
+- isolate routing detectability from availability failures.
 
-If this assumption is violated in a real deployment, routing correctness
-is not guaranteed. This tradeoff is accepted to enable controlled,
-measurable detectability experiments.
+If violated, correctness is not guaranteed; this tradeoff is explicitly accepted for a controlled, population-level detectability evaluation.
 
 ---
 
-## Inputs
+## Behavioral Feasibility Region (Separate from Snapshot)
 
-All inputs are agreed upon out-of-band:
+The **behavioral feasibility region** is **not** part of the repository snapshot.
+
+It is learned independently from benign GitHub interaction logs and defines which artifact classes and URLs are accessed at specific times, as well as 
+the latency relationships between actions across users.
+
+Formally, the feasibility region constrains **time-indexed action tuples**:
+
+(time_window, artifactClass, URL_role)
+
+This region governs *when* a specific URL may be accessed or mutated without deviating from benign behavior.
+
+---
+
+## Separation of Construction vs. Deployment
+
+### Resolver Construction (Offline)
+
+The resolver is built using:
+- the fixed repository snapshot (existence + identifiers),
+- the routing namespace `N`,
+- the benign behavioral feasibility region `R`.
+
+These inputs define the **allowable resolution space**.
+
+### Resolver Deployment (Runtime)
+
+During deployment, the sender and receiver provide only:
+- epoch index `t`,
+- `senderID`,
+- `receiverID`,
+- role (`sender` or `receiver`).
+
+The resolver **does not recompute feasibility or consult state** at runtime; it applies precomputed constraints.
+
+---
+
+## Inputs (Runtime)
+
+All runtime inputs are shared out-of-band:
 
 - **Epoch `t`**  
-  A shared, discrete epoch index.
+  An index into a behaviorally feasible time window.
 
 - **Sender identifier `senderID`**  
-  A stable identifier for the sender.
+  Stable identifier for the sender.
 
 - **Receiver identifier `receiverID`**  
-  A stable identifier for the receiver.
+  Stable identifier for the receiver.
 
-- **Repository snapshot configuration**
-  - repository owner and name
-  - artifact-class namespace `N`
-  - list of existing identifiers per class
-  - empirical identifier bounds and frequencies
+- **Role**  
+  Either `sender` or `receiver`.
 
 ---
 
@@ -90,11 +127,12 @@ All inputs are agreed upon out-of-band:
 
 At epoch `t`, the resolver outputs:
 
-- an artifact class `C ∈ N`
-- a **concrete identifier tuple that exists in the snapshot**
-- a **role-specific canonical GitHub URL**
+- artifact class `C ∈ N`,
+- an **existing identifier tuple**
+- and **role-specific canonical GitHub URL** from the snapshot,
+All objects are behaviorally feasible at epoch `t`.
 
-Routing is defined over the tuple:
+Formally:
 
 Route(t, role) = (artifactClass, identifierTuple, URL_role)
 
@@ -104,15 +142,13 @@ Route(t, role) = (artifactClass, identifierTuple, URL_role)
 
 ### PRNG Selection
 
-The resolver uses a deterministic pseudo-random generator derived from a
-cryptographic hash function `H`, chosen for:
+A cryptographic hash function `H` is used as a **deterministic pseudo-random generator**, providing:
 
-- reproducibility
-- uniformity over identifier space
-- independence across epochs
+- reproducibility,
+- uniform dispersion over snapshot-defined choices,
+- independence across epochs.
 
-The PRNG is used **only to select among snapshot-defined possibilities**,
-never to invent identifiers.
+The PRNG is **never used to invent identifiers**, only to select among existing, snapshot-defined ones.
 
 ### PRNG Interface
 
@@ -120,102 +156,113 @@ The shared digest is computed as:
 
 digest = H(t, senderID, receiverID)
 
-All routing decisions are derived from fixed slices of this digest.
+All resolution decisions derive from fixed slices of this digest.
 
 ---
 
-## Digest-to-Artifact Resolution
+## Digest Slicing and Artifact Resolution
 
 ### Artifact Class Selection
 
-The first slice of the digest selects an artifact class:
+The first 8 bytes of the digest select the artifact class:
 
 classIndex = int(digest[0:8]) mod |N|
 artifactClass = N[classIndex]
 
-This indexing applies **only** to the fixed, agreed-upon class set `N`.
+This indexing applies **only** to the fixed artifact-class namespace `N`.
 
 ---
 
-### Identifier Selection Within Snapshot
+### Identifier Field Slicing
 
-For the selected artifact class:
+Subsequent, non-overlapping slices of the digest are used to populate identifier fields.
 
-1. Let `S_C` be the snapshot-defined set of existing identifiers
-   for class `C`.
-2. The resolver deterministically selects **one identifier from `S_C`**
-   using digest-derived values.
-3. Selection is stable across sender and receiver.
+primary = int(digest[ 8:16])
+secondary = int(digest[16:24])
+tertiary = int(digest[24:32])
+quaternary = int(digest[32:40])
+quinary = int(digest[40:48])
 
-This guarantees that **every resolved identifier exists** and is
-addressable for the duration of the experiment.
+Slices are assigned in order according to the identifier schema of the selected artifact class.
+
+---
+
+### Identifier Instantiation Rules
+
+For an artifact class requiring `k` numeric identifier fields (`2 ≤ k ≤ 5`):
+
+f_i = (slice_i mod MaxF_i(repoSnapshot)) + 1
+
+The resulting identifier tuple is:
+
+(repoId, f1 [, f2 [, f3 [, f4 [, f5 ]]]])
 
 ---
 
 ## Sender vs. Receiver URL Resolution
 
-Although sender and receiver resolve the **same identifier tuple** at
-epoch `t`, they intentionally resolve it to **different URLs**.
+The resolver is **role-aware but identifier-consistent**.
 
-- The **sender** resolves the identifier to a URL that supports
-  *benign mutation* (e.g., create, edit, reply, or update).
-- The **receiver** resolves the same identifier to a URL that supports
-  *benign observation* (e.g., view, scroll, or read).
-
-This asymmetry is essential: routing agreement occurs at the identifier
-level, while **behavioral realism is enforced at the URL level**.
+- Sender and receiver resolve the **same identifier tuple**.
+- They resolve it to **different URLs**, reflecting benign roles.
 
 ---
 
-## Canonical URL Construction
+## URL Resolution Under Behavioral Constraints
 
-Identifier tuples are converted into canonical GitHub URLs using fixed,
-public templates.
+URL selection is constrained by the behavioral feasibility region:
 
-Examples:
+(URL_role ∈ R) ∧ (t ∈ admissible_time_window(URL_role))
 
-- Issues:  
-  `https://github.com/{owner}/{repo}/issues/new`
-  
-- Issue comments:  
-  ` https://github.com/{owner}/{repo}/issues/{issue_number}`
-
-- Pull requests:  
-  `https://github.com/{owner}/{repo}/pull/{pull_number}`
-
-- Commits:  
-  `https://github.com/{owner}/{repo}/edit/{branch}/{path}`
-
-### Behavioral Dependence of URL Selection
-
-The **specific URL chosen** is as important as the identifier itself.
-The same identifier may admit multiple valid URLs corresponding to
-distinct behaviors (viewing, editing, replying, or creating).
-
-Both sender-side and receiver-side URL selection are constrained by
-**statistical distributions of benign behavior** derived from empirical
-datasets. Final routing is therefore defined by the pair:
-
-(identifierTuple, URL_role),
-
-not by the identifier alone.
+The resolver never outputs a URL outside the feasibility region.
 
 ---
 
 ## Collision Handling
 
-A collision occurs if a digest-derived selection maps to an identifier
-that is invalid or unavailable within the snapshot.
+If a digest-derived selection violates snapshot or feasibility constraints:
 
-Collisions are resolved deterministically by applying a fixed rehashing
-rule until a valid, existing identifier is selected.
+- a deterministic rehashing rule is applied,
+- resolution repeats until a valid triple is found.
 
 ---
 
 ## Resolver API
 
-The resolver exposes a single pure function:
-
 ResolveDeadDrop(t, senderID, receiverID, role)
 → { artifactClass, identifierTuple, canonicalURL }
 
+---
+
+## Determinism Guarantees
+
+- Identical inputs yield identical outputs
+- No live state queries
+- No runtime enumeration
+- Sender and receiver remain synchronized
+
+---
+
+## Assumptions and Limitations
+
+### Assumptions
+- Fixed repository snapshot
+- Accurate behavioral feasibility region
+- Out-of-band key and parameter sharing
+
+### Limitations
+- No delivery guarantees
+- No repository evolution handling
+- No behavioral scheduling
+- No adversarial interference modeling
+
+---
+
+## Summary
+
+The deterministic dead-drop resolver maps shared cryptographic inputs to
+**existing GitHub artifact identifiers** and **role-specific, behaviorally
+feasible URLs**. By separating repository structure, behavioral feasibility,
+and runtime resolution, it enables asynchronous covert routing that is
+structurally valid, behaviorally indistinguishable, and reproducible—without
+live state queries, enumeration, or sender–receiver coordination.
