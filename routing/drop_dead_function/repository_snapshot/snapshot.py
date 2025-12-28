@@ -14,8 +14,6 @@ This module performs:
 - No network access
 - No serialization
 - No behavioral logic
-
-It defines what a repository snapshot *is*.
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Iterable, Any, Mapping
 from collections import defaultdict
 
-from schema import (
+from .schema import (
     ArtifactClass,
     ArtifactIdentifierSchema,
     IdentifierField,
@@ -36,33 +34,20 @@ from schema import (
 # ============================================================
 
 class SnapshotError(Exception):
-    """
-    Base class for snapshot-related errors.
-
-    All snapshot exceptions carry a message and optional structured context
-    to support debugging, reproducibility, and programmatic inspection.
-    """
+    """Base class for snapshot-related errors."""
 
     def __init__(self, message: str, *, context: Dict[str, Any] | None = None):
         super().__init__(message)
-        self.message = message
         self.context = context or {}
 
     def __str__(self) -> str:
         if not self.context:
-            return self.message
-        return f"{self.message} | context={self.context}"
+            return self.args[0]
+        return f"{self.args[0]} | context={self.context}"
 
 
 class SchemaViolation(SnapshotError):
-    """
-    Raised when an identifier tuple violates its declared schema.
-
-    Examples:
-    - Missing required field
-    - Incorrect field type
-    - Malformed identifier value
-    """
+    """Raised when an identifier violates its schema."""
 
     def __init__(
         self,
@@ -73,59 +58,49 @@ class SchemaViolation(SnapshotError):
         expected_type: str | None = None,
         actual_value: Any | None = None,
     ):
-        context = {
+        ctx = {
             "artifact_class": artifact_class,
             "field": field_name,
             "expected_type": expected_type,
             "actual_value": actual_value,
         }
-        context = {k: v for k, v in context.items() if v is not None}
-        super().__init__(message, context=context)
+        super().__init__(message, context={k: v for k, v in ctx.items() if v is not None})
 
 
 class DuplicateIdentifier(SnapshotError):
-    """
-    Raised when duplicate canonical identifiers are detected.
-
-    This indicates a violation of snapshot uniqueness invariants.
-    """
+    """Raised when duplicate identifiers are detected."""
 
     def __init__(
         self,
         message: str,
         *,
-        artifact_class: ArtifactClass | None = None,
-        identifier: Tuple[Any, ...] | None = None,
+        artifact_class: ArtifactClass,
+        identifier: Tuple[Any, ...],
     ):
-        context = {
-            "artifact_class": artifact_class,
-            "identifier": identifier,
-        }
-        context = {k: v for k, v in context.items() if v is not None}
-        super().__init__(message, context=context)
+        super().__init__(
+            message,
+            context={
+                "artifact_class": artifact_class,
+                "identifier": identifier,
+            },
+        )
 
 
 class UnknownArtifactClass(SnapshotError):
-    """
-    Raised when an artifact class string from enumeration cannot be mapped
-    to a known ArtifactClass enum.
-    """
+    """Raised when an unknown artifact class string is encountered."""
 
-    def __init__(self, raw_class: str):
+    def __init__(self, raw: str):
         super().__init__(
-            f"Unknown artifact class '{raw_class}'",
-            context={"raw_class": raw_class},
+            f"Unknown artifact class '{raw}'",
+            context={"raw_class": raw},
         )
 
 
 # ============================================================
-# Helper functions
+# Helpers
 # ============================================================
 
 def _coerce_field(value: Any, field: IdentifierField) -> Any:
-    """
-    Enforce identifier field type constraints.
-    """
     if field.field_type == "string":
         if not isinstance(value, str):
             raise SchemaViolation(
@@ -167,11 +142,7 @@ def _normalize_identifier(
     raw: Mapping[str, Any],
     schema: ArtifactIdentifierSchema,
 ) -> Tuple[Any, ...]:
-    """
-    Convert a raw identifier dict into a canonical ordered tuple
-    according to the schema.
-    """
-    values = []
+    values: List[Any] = []
 
     for field in schema.fields:
         if field.name not in raw:
@@ -186,14 +157,11 @@ def _normalize_identifier(
 
 
 # ============================================================
-# Snapshot Data Classes
+# Snapshot Objects
 # ============================================================
 
 @dataclass(frozen=True)
 class SnapshotArtifact:
-    """
-    A single artifact entry in the snapshot.
-    """
     artifact_class: ArtifactClass
     identifier: Tuple[Any, ...]
 
@@ -201,13 +169,7 @@ class SnapshotArtifact:
 @dataclass
 class RepositorySnapshot:
     """
-    Canonical snapshot of a repository's addressable artifacts.
-
-    The snapshot is:
-    - Schema-valid
-    - Duplicate-free
-    - Deterministically ordered
-    - Content-blind
+    Canonical, immutable snapshot of repository artifacts.
     """
 
     artifacts: Dict[ArtifactClass, Tuple[SnapshotArtifact, ...]] = field(
@@ -220,13 +182,9 @@ class RepositorySnapshot:
 
     @classmethod
     def from_enumeration(cls, raw_snapshot: Dict[str, Any]) -> "RepositorySnapshot":
-        """
-        Build a RepositorySnapshot from raw enumeration output
-        produced by enumerators.build_snapshot().
-        """
         raw_artifacts = raw_snapshot.get("artifacts")
         if raw_artifacts is None:
-            raise SnapshotError("Missing 'artifacts' section in raw snapshot")
+            raise SnapshotError("Missing 'artifacts' section in snapshot")
 
         buckets: Dict[ArtifactClass, List[SnapshotArtifact]] = defaultdict(list)
         seen: set[Tuple[ArtifactClass, Tuple[Any, ...]]] = set()
@@ -255,16 +213,12 @@ class RepositorySnapshot:
 
                 seen.add(key)
                 buckets[artifact_class].append(
-                    SnapshotArtifact(
-                        artifact_class=artifact_class,
-                        identifier=identifier,
-                    )
+                    SnapshotArtifact(artifact_class, identifier)
                 )
 
-        # Freeze ordering for determinism
         frozen = {
-            cls_: tuple(sorted(arts, key=lambda a: a.identifier))
-            for cls_, arts in buckets.items()
+            cls_: tuple(sorted(items, key=lambda a: a.identifier))
+            for cls_, items in buckets.items()
         }
 
         return cls(artifacts=frozen)
@@ -288,9 +242,6 @@ class RepositorySnapshot:
 
     @staticmethod
     def _parse_artifact_class(raw: str) -> ArtifactClass:
-        """
-        Convert enumerator artifact class strings into ArtifactClass enum.
-        """
         mapping = {
             "Repositories": ArtifactClass.REPOSITORY,
             "Issues": ArtifactClass.ISSUE,
