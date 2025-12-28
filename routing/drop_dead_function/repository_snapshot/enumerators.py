@@ -1,49 +1,13 @@
 """
 enumerators.py
 
-Snapshot Construction Enumerators
-
-===========================================================================
-SNAPSHOT ENUMERATION SCOPE
-===========================================================================
+Snapshot Construction Enumerators (REST API ONLY)
 
 This module performs authenticated, REST-API-based enumeration of GitHub
 repository artifacts for the sole purpose of constructing a fixed snapshot
 prior to experimentation.
 
-===========================================================================
-USAGE
-===========================================================================
-
-Prerequisites:
-  1. Create a GitHub access token with READ access to the target repository.
-     - Public repo: no special scopes required
-     - Private repo: token must have repository read permissions
-  2. Export the token as an environment variable:
-
-        export GITHUB_TOKEN=ghp_your_token_here
-
-Running the snapshot enumerator:
-
-    python enumerators.py --owner <OWNER> --repo <REPO> [--max-pages N]
-
-Example (small public repo):
-
-    python enumerators.py --owner octocat --repo Hello-World --max-pages 1
-
-Example (private repo you own):
-
-    python enumerators.py --owner your-username --repo your-private-repo --max-pages 1
-
-Output:
-  - Writes a JSON snapshot file (default: snapshot.json)
-  - The snapshot contains only existing artifact identifiers
-  - No API calls are made after snapshot construction completes
-
-Notes:
-  - This module is intended for pre-experiment snapshot construction only.
-  - All API activity occurs before any detectability or runtime evaluation.
-  - Pagination limits (--max-pages) are recommended for large repositories.
+All enumeration occurs pre-experiment.
 """
 
 from __future__ import annotations
@@ -53,7 +17,7 @@ import time
 import json
 import random
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Iterable, Tuple
+from typing import Dict, List, Any, Optional, Iterable
 
 import requests
 
@@ -73,32 +37,14 @@ DEFAULT_HEADERS = {
 
 
 # -------------------------------------------------------------------
-# REST Client with Pagination + Rate Limit Handling
+# REST Client
 # -------------------------------------------------------------------
 
 class GitHubRESTClient:
-    """
-    Minimal REST client with:
-      - authentication
-      - pagination crawling
-      - rate-limit backoff
-    """
-
-    def __init__(
-        self,
-        token: str,
-        timeout: int = 30,
-        max_retries: int = 6,
-    ):
+    def __init__(self, token: str):
         self.session = requests.Session()
         self.session.headers.update(DEFAULT_HEADERS)
         self.session.headers["Authorization"] = f"Bearer {token}"
-        self.timeout = timeout
-        self.max_retries = max_retries
-
-    def get(self, path: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
-        url = f"{REST_BASE_URL}{path}"
-        return self._request_with_backoff("GET", url, params=params)
 
     def paginate(
         self,
@@ -107,67 +53,26 @@ class GitHubRESTClient:
         per_page: int = 100,
         max_pages: Optional[int] = None,
     ) -> Iterable[Dict[str, Any]]:
-        """
-        Crawl all REST pages for an endpoint returning an array.
-        """
         params = dict(params or {})
         params["per_page"] = per_page
-        page_count = 0
-
-        url = f"{REST_BASE_URL}{path}"
+        page = 1
 
         while True:
-            if max_pages is not None and page_count >= max_pages:
+            if max_pages is not None and page > max_pages:
                 return
 
-            resp = self._request_with_backoff("GET", url, params=params)
+            params["page"] = page
+            resp = self.session.get(f"{REST_BASE_URL}{path}", params=params)
+            resp.raise_for_status()
             data = resp.json()
 
-            if not isinstance(data, list):
+            if not data:
                 return
 
             for item in data:
                 yield item
 
-            page_count += 1
-            next_url = self._next_link(resp.headers.get("Link", ""))
-            if not next_url:
-                return
-
-            url = next_url
-            params = None  # already encoded in next_url
-
-    def _request_with_backoff(self, method: str, url: str, **kwargs) -> requests.Response:
-        for attempt in range(self.max_retries):
-            resp = self.session.request(method, url, timeout=self.timeout, **kwargs)
-
-            if resp.status_code == 200:
-                return resp
-
-            # Primary rate limit
-            if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
-                reset = int(resp.headers.get("X-RateLimit-Reset", time.time() + 60))
-                sleep_time = max(0, reset - int(time.time())) + 1
-                time.sleep(sleep_time)
-                continue
-
-            # Secondary limits / transient errors
-            if resp.status_code in (403, 429) or 500 <= resp.status_code < 600:
-                time.sleep(min(2 ** attempt, 30) + random.random())
-                continue
-
-            raise RuntimeError(f"REST error {resp.status_code}: {resp.text[:300]}")
-
-        raise RuntimeError("Exceeded REST retry budget")
-
-    @staticmethod
-    def _next_link(link_header: str) -> Optional[str]:
-        if not link_header:
-            return None
-        for part in link_header.split(","):
-            if 'rel="next"' in part:
-                return part[part.find("<") + 1 : part.find(">")]
-        return None
+            page += 1
 
 
 # -------------------------------------------------------------------
@@ -175,10 +80,6 @@ class GitHubRESTClient:
 # -------------------------------------------------------------------
 
 class ArtifactEnumerator(ABC):
-    """
-    Enumerators crawl REST API pages to extract artifact identifiers.
-    """
-
     def __init__(self, client: GitHubRESTClient):
         self.client = client
 
@@ -192,65 +93,56 @@ class ArtifactEnumerator(ABC):
 # -------------------------------------------------------------------
 
 class RepositoryEnumerator(ArtifactEnumerator):
-
     def enumerate(self, owner: str, repo: str, **_) -> List[Dict[str, Any]]:
-        data = self.client.get(f"/repos/{owner}/{repo}").json()
         return [{
             "artifactClass": "Repositories",
             "identifierTuple": {
                 "owner": owner,
                 "repo": repo,
-                "repo_id": data["id"],
-                "node_id": data["node_id"],
             }
         }]
 
 
 class IssueEnumerator(ArtifactEnumerator):
-
     def enumerate(
         self,
         owner: str,
         repo: str,
-        state: str = "all",
         max_pages: Optional[int] = None,
         **_,
     ) -> List[Dict[str, Any]]:
         out = []
-        for item in self.client.paginate(
+        for issue in self.client.paginate(
             f"/repos/{owner}/{repo}/issues",
-            params={"state": state},
+            params={"state": "all"},
             max_pages=max_pages,
         ):
-            if "pull_request" in item:
+            if "pull_request" in issue:
                 continue
+
             out.append({
                 "artifactClass": "Issues",
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
-                    "number": item["number"],
-                    "issue_id": item["id"],
-                    "node_id": item["node_id"],
+                    "issue_number": issue["number"],
                 }
             })
         return out
 
 
 class PullRequestEnumerator(ArtifactEnumerator):
-
     def enumerate(
         self,
         owner: str,
         repo: str,
-        state: str = "all",
         max_pages: Optional[int] = None,
         **_,
     ) -> List[Dict[str, Any]]:
         out = []
-        for item in self.client.paginate(
+        for pr in self.client.paginate(
             f"/repos/{owner}/{repo}/pulls",
-            params={"state": state},
+            params={"state": "all"},
             max_pages=max_pages,
         ):
             out.append({
@@ -258,48 +150,42 @@ class PullRequestEnumerator(ArtifactEnumerator):
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
-                    "number": item["number"],
-                    "pr_id": item["id"],
-                    "node_id": item["node_id"],
+                    "pull_number": pr["number"],
+                    "branch_1": pr["head"]["ref"],
+                    "branch_2": pr["base"]["ref"],
                 }
             })
         return out
 
 
-class CommentEnumerator(ArtifactEnumerator):
-
-    PATHS = {
-        "IssueComments": "/repos/{owner}/{repo}/issues/comments",
-        "PRComments": "/repos/{owner}/{repo}/pulls/comments",
-        "CommitComments": "/repos/{owner}/{repo}/comments",
-    }
-
+class IssueCommentEnumerator(ArtifactEnumerator):
     def enumerate(
         self,
         owner: str,
         repo: str,
-        kind: str,
         max_pages: Optional[int] = None,
         **_,
     ) -> List[Dict[str, Any]]:
-        path = self.PATHS[kind].format(owner=owner, repo=repo)
         out = []
+        for comment in self.client.paginate(
+            f"/repos/{owner}/{repo}/issues/comments",
+            max_pages=max_pages,
+        ):
+            issue_url = comment["issue_url"]
+            issue_number = int(issue_url.rstrip("/").split("/")[-1])
 
-        for item in self.client.paginate(path, max_pages=max_pages):
             out.append({
-                "artifactClass": kind,
+                "artifactClass": "IssueComments",
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
-                    "comment_id": item["id"],
-                    "node_id": item["node_id"],
+                    "issue_number": issue_number,
                 }
             })
         return out
 
 
 class CommitEnumerator(ArtifactEnumerator):
-
     def enumerate(
         self,
         owner: str,
@@ -308,7 +194,7 @@ class CommitEnumerator(ArtifactEnumerator):
         **_,
     ) -> List[Dict[str, Any]]:
         out = []
-        for item in self.client.paginate(
+        for commit in self.client.paginate(
             f"/repos/{owner}/{repo}/commits",
             max_pages=max_pages,
         ):
@@ -317,8 +203,33 @@ class CommitEnumerator(ArtifactEnumerator):
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
-                    "sha": item["sha"],
-                    "node_id": item["node_id"],
+                    "branch": commit["commit"]["tree"]["sha"],
+                    "path": "",
+                    "commit_sha": commit["sha"],
+                }
+            })
+        return out
+
+
+class CommitCommentEnumerator(ArtifactEnumerator):
+    def enumerate(
+        self,
+        owner: str,
+        repo: str,
+        max_pages: Optional[int] = None,
+        **_,
+    ) -> List[Dict[str, Any]]:
+        out = []
+        for comment in self.client.paginate(
+            f"/repos/{owner}/{repo}/comments",
+            max_pages=max_pages,
+        ):
+            out.append({
+                "artifactClass": "CommitComments",
+                "identifierTuple": {
+                    "owner": owner,
+                    "repo": repo,
+                    "commit_sha": comment["commit_id"],
                 }
             })
         return out
@@ -332,9 +243,8 @@ ARTIFACT_ENUMERATOR_REGISTRY = {
     "Repositories": RepositoryEnumerator,
     "Issues": IssueEnumerator,
     "PullRequests": PullRequestEnumerator,
-    "IssueComments": CommentEnumerator,
-    "PRComments": CommentEnumerator,
-    "CommitComments": CommentEnumerator,
+    "IssueComments": IssueCommentEnumerator,
+    "CommitComments": CommitCommentEnumerator,
     "Commits": CommitEnumerator,
 }
 
@@ -346,7 +256,6 @@ ARTIFACT_ENUMERATOR_REGISTRY = {
 def build_snapshot(
     owner: str,
     repo: str,
-    include: Optional[List[str]] = None,
     limits: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
 
@@ -355,7 +264,6 @@ def build_snapshot(
         raise RuntimeError(f"Set {TOKEN_ENV} with a GitHub access token")
 
     client = GitHubRESTClient(token)
-    include = include or list(ARTIFACT_ENUMERATOR_REGISTRY.keys())
     limits = limits or {}
 
     snapshot = {
@@ -364,18 +272,11 @@ def build_snapshot(
         "artifacts": {},
     }
 
-    for name in include:
-        enum_cls = ARTIFACT_ENUMERATOR_REGISTRY[name]
+    for name, enum_cls in ARTIFACT_ENUMERATOR_REGISTRY.items():
         enum = enum_cls(client)
-
-        if name.endswith("Comments"):
-            snapshot["artifacts"][name] = enum.enumerate(
-                owner, repo, kind=name, **limits.get(name, {})
-            )
-        else:
-            snapshot["artifacts"][name] = enum.enumerate(
-                owner, repo, **limits.get(name, {})
-            )
+        snapshot["artifacts"][name] = enum.enumerate(
+            owner, repo, **limits.get(name, {})
+        )
 
     return snapshot
 
@@ -399,11 +300,11 @@ if __name__ == "__main__":
     p.add_argument("--max-pages", type=int, default=None)
     args = p.parse_args()
 
-    lim = {}
+    limits = {}
     if args.max_pages is not None:
         for k in ARTIFACT_ENUMERATOR_REGISTRY:
-            lim[k] = {"max_pages": args.max_pages}
+            limits[k] = {"max_pages": args.max_pages}
 
-    snap = build_snapshot(args.owner, args.repo, limits=lim)
+    snap = build_snapshot(args.owner, args.repo, limits=limits)
     write_snapshot(snap, args.out)
     print(f"Snapshot written to {args.out}")
