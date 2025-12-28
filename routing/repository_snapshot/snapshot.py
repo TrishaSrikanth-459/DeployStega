@@ -16,24 +16,6 @@ This module performs:
 - No behavioral logic
 
 It defines what a repository snapshot *is*.
-
-===========================================================================
-USAGE
-===========================================================================
-
-Typical workflow:
-
-    from enumerators import build_snapshot
-    from snapshot import RepositorySnapshot
-
-    raw = build_snapshot(owner="OWNER", repo="REPO")
-    snapshot = RepositorySnapshot.from_enumeration(raw)
-
-The resulting snapshot is:
-- Schema-valid
-- Deterministically ordered
-- Identifier-only (content-blind)
-- Ready for serialization or resolver consumption
 """
 
 from __future__ import annotations
