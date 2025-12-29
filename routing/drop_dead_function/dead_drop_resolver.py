@@ -3,21 +3,8 @@ dead_drop_resolver.py
 
 Deterministic Dead-Drop Resolver (Runtime)
 
-This module implements the deterministic routing function described in
+Implements the deterministic routing function described in
 dead_drop_resolver.md.
-
-Responsibilities:
-- Load a fixed repository snapshot
-- Deterministically select an existing artifact identifier
-- Resolve role-specific GitHub URLs
-- Enforce behavioral feasibility constraints
-- Produce a concrete routing decision for a given epoch
-
-Non-responsibilities:
-- No enumeration
-- No network access
-- No behavioral learning
-- No scheduling
 """
 
 from __future__ import annotations
@@ -25,16 +12,16 @@ from __future__ import annotations
 import hashlib
 from typing import Tuple, Any, Literal
 
-# ------------------------
-# Internal imports
-# ------------------------
+# ============================================================
+# Package-relative imports (CORRECT)
+# ============================================================
 
-from repository_snapshot.snapshot import RepositorySnapshot
-from repository_snapshot.schema import ArtifactClass
-from repository_snapshot.serializer import read_snapshot
+from .repository_snapshot.snapshot import RepositorySnapshot
+from .repository_snapshot.schema import ArtifactClass
+from .repository_snapshot.serializer import read_snapshot
 
-from feasibility_region import FeasibilityRegion
-from github_url_builder import GitHubURLBuilder
+from .feasibility_region import FeasibilityRegion
+from .github_url_builder import GitHubURLBuilder
 
 Role = Literal["sender", "receiver"]
 
@@ -47,11 +34,11 @@ class DeadDropResolver:
     """
     Deterministic dead-drop resolver.
 
-    This object is constructed offline with:
+    Constructed offline with:
     - a fixed RepositorySnapshot
     - a feasibility region
 
-    It is evaluated at runtime using only shared inputs.
+    Evaluated at runtime using only shared inputs.
     """
 
     def __init__(
@@ -96,7 +83,6 @@ class DeadDropResolver:
 
         digest = self._digest(epoch, sender_id, receiver_id)
 
-        # Retry loop for collision / infeasible selections
         counter = 0
         while True:
             d = self._rehash(digest, counter)
@@ -121,9 +107,9 @@ class DeadDropResolver:
     @staticmethod
     def _digest(epoch: int, sender: str, receiver: str) -> bytes:
         h = hashlib.sha256()
-        h.update(str(epoch).encode())
-        h.update(sender.encode())
-        h.update(receiver.encode())
+        h.update(str(epoch).encode("utf-8"))
+        h.update(sender.encode("utf-8"))
+        h.update(receiver.encode("utf-8"))
         return h.digest()
 
     @staticmethod
@@ -151,7 +137,7 @@ class DeadDropResolver:
 
         artifacts = self.snapshot.artifacts_of(artifact_class)
         if not artifacts:
-            raise RuntimeError(f"No artifacts for class {artifact_class}")
+            raise RuntimeError(f"No artifacts for class {artifact_class.name}")
 
         idx = int.from_bytes(digest[8:16], "big") % len(artifacts)
         return artifacts[idx].identifier
@@ -167,15 +153,22 @@ class DeadDropResolver:
         identifier: Tuple[Any, ...],
         role: Role,
     ) -> str | None:
+        """
+        Select the first feasible URL for the artifact and role,
+        or return None if none are allowed.
+        """
 
+        # CRITICAL FIX:
+        # Pass the canonical enum name directly.
+        # DO NOT apply string transformations.
         urls = self.url_builder.urls_for(
-            artifact_class.name.replace("_", "").title(),
+            artifact_class.name,
             identifier,
             role,
         )
 
         for url in urls:
-            if self.feasibility.is_feasible(
+            if self.feasibility.is_url_allowed(
                 epoch=epoch,
                 artifact_class=artifact_class.name,
                 role=role,
@@ -184,43 +177,3 @@ class DeadDropResolver:
                 return url
 
         return None
-
-
-# ============================================================
-# CLI (for testing)
-# ============================================================
-
-if __name__ == "__main__":
-    import argparse
-
-    p = argparse.ArgumentParser()
-    p.add_argument("--snapshot", required=True)
-    p.add_argument("--epoch", type=int, required=True)
-    p.add_argument("--sender", required=True)
-    p.add_argument("--receiver", required=True)
-    p.add_argument("--role", choices=["sender", "receiver"], required=True)
-    args = p.parse_args()
-
-    # Dummy feasibility region (accept everything)
-    class AllowAllFeasibility(FeasibilityRegion):
-        def is_feasible(self, *, epoch, artifact_class, role, url) -> bool:
-            return True
-
-    snapshot = read_snapshot(args.snapshot)
-
-    resolver = DeadDropResolver(
-        snapshot=snapshot,
-        feasibility_region=AllowAllFeasibility(),
-        owner=snapshot.artifacts[next(iter(snapshot.artifacts))][0].identifier[0],
-        repo=snapshot.artifacts[next(iter(snapshot.artifacts))][0].identifier[1],
-    )
-
-    result = resolver.resolve(
-        epoch=args.epoch,
-        sender_id=args.sender,
-        receiver_id=args.receiver,
-        role=args.role,
-    )
-
-    print(result)
-
