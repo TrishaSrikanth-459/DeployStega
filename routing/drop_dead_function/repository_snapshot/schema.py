@@ -22,13 +22,23 @@ from typing import Tuple, Dict
 # =========================
 
 class ArtifactClass(Enum):
-    REPOSITORY = "repository"
-    ISSUE = "issue"
-    PULL_REQUEST = "pull_request"
-    COMMIT = "commit"
-    ISSUE_COMMENT = "issue_comment"
-    PULL_REQUEST_COMMENT = "pull_request_comment"
-    COMMIT_COMMENT = "commit_comment"
+    """
+    IMPORTANT INVARIANT:
+
+    - Enum MEMBER NAMES must exactly match snapshot JSON keys
+      because the serializer uses ArtifactClass[class_name]
+    - Enum VALUES preserve canonical semantic labels
+    """
+
+    Repositories = "repository"
+    Issues = "issue"
+    PullRequests = "pull_request"
+    Commits = "commit"
+    IssueComments = "issue_comment"
+    PRComments = "pull_request_comment"
+    CommitComments = "commit_comment"
+    Discussions = "discussion"
+    DiscussionComments = "discussion_comment"
 
 
 # =========================
@@ -58,11 +68,11 @@ class ArtifactIdentifierSchema:
 
 
 # =========================
-# Canonical Schemas (Exact)
+# Canonical Schemas
 # =========================
 
 REPOSITORY_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.REPOSITORY,
+    artifact_class=ArtifactClass.Repositories,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
@@ -70,7 +80,7 @@ REPOSITORY_SCHEMA = ArtifactIdentifierSchema(
 )
 
 ISSUE_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.ISSUE,
+    artifact_class=ArtifactClass.Issues,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
@@ -79,51 +89,69 @@ ISSUE_SCHEMA = ArtifactIdentifierSchema(
 )
 
 PULL_REQUEST_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.PULL_REQUEST,
+    artifact_class=ArtifactClass.PullRequests,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("pull_number", "integer"),
-        IdentifierField("branch_1", "string"),
-        IdentifierField("branch_2", "string"),
     ),
 )
 
 COMMIT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.COMMIT,
+    artifact_class=ArtifactClass.Commits,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
-        IdentifierField("branch", "string"),
-        IdentifierField("path", "string"),
         IdentifierField("commit_sha", "hash"),
     ),
 )
 
 ISSUE_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.ISSUE_COMMENT,
+    artifact_class=ArtifactClass.IssueComments,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("issue_number", "integer"),
+        IdentifierField("comment_id", "integer"),
     ),
 )
 
 PULL_REQUEST_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.PULL_REQUEST_COMMENT,
+    artifact_class=ArtifactClass.PRComments,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("pull_number", "integer"),
+        IdentifierField("comment_id", "integer"),
     ),
 )
 
 COMMIT_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.COMMIT_COMMENT,
+    artifact_class=ArtifactClass.CommitComments,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("commit_sha", "hash"),
+        IdentifierField("comment_id", "integer"),
+    ),
+)
+
+DISCUSSION_SCHEMA = ArtifactIdentifierSchema(
+    artifact_class=ArtifactClass.Discussions,
+    fields=(
+        IdentifierField("owner", "string"),
+        IdentifierField("repo", "string"),
+        IdentifierField("discussion_number", "integer"),
+    ),
+)
+
+DISCUSSION_COMMENT_SCHEMA = ArtifactIdentifierSchema(
+    artifact_class=ArtifactClass.DiscussionComments,
+    fields=(
+        IdentifierField("owner", "string"),
+        IdentifierField("repo", "string"),
+        IdentifierField("discussion_number", "integer"),
+        IdentifierField("comment_id", "integer"),
     ),
 )
 
@@ -142,6 +170,8 @@ SCHEMA_REGISTRY: Dict[ArtifactClass, ArtifactIdentifierSchema] = {
         ISSUE_COMMENT_SCHEMA,
         PULL_REQUEST_COMMENT_SCHEMA,
         COMMIT_COMMENT_SCHEMA,
+        DISCUSSION_SCHEMA,
+        DISCUSSION_COMMENT_SCHEMA,
     )
 }
 
