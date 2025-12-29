@@ -1,0 +1,13 @@
+{
+  "experiment_id": "exp_001",
+  "epoch_granularity": "daily",
+  "snapshot": "tests/snapshots/minimal.json",
+  "participants": {
+    "sender": {
+      "id": "SID_REPLACE_ME"
+    },
+    "receiver": {
+      "id": "SID_REPLACE_ME"
+    }
+  }
+}
