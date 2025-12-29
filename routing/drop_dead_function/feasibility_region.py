@@ -23,8 +23,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Iterable, Literal
 
+
 Role = Literal["sender", "receiver"]
 
+
+# ============================================================
+# Exceptions
+# ============================================================
 
 class FeasibilityViolation(Exception):
     """
@@ -32,6 +37,10 @@ class FeasibilityViolation(Exception):
     """
     pass
 
+
+# ============================================================
+# Feasibility Region Interface
+# ============================================================
 
 class FeasibilityRegion(ABC):
     """
@@ -58,7 +67,7 @@ class FeasibilityRegion(ABC):
         Return True iff the given URL is behaviorally feasible for the role
         at the specified epoch.
 
-        This method must be:
+        This method MUST be:
         - deterministic
         - side-effect free
         - constant-time w.r.t. snapshot size
@@ -79,6 +88,9 @@ class FeasibilityRegion(ABC):
     ) -> list[str]:
         """
         Filter a candidate URL set down to those allowed by the feasibility region.
+
+        This helper exists purely for convenience and MUST NOT introduce
+        any additional semantics beyond repeated calls to is_url_allowed().
         """
         return [
             url
