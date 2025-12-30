@@ -333,7 +333,7 @@ Verification converts retrieval into a **search with a definitive stopping condi
 ---
 ## Receiver Epoch Inspection Window
 
-The receiver may deterministically resolve and inspect artifacts corresponding to a **fixed, finite window of past epochs** based on behaviorally-feasible constraints.
+The receiver may deterministically resolve and inspect artifacts corresponding to a **fixed, finite window of past epochs** based on behavioral constraints.
 
 Specifically, at logical time **T**, the receiver is permitted to evaluate resolver outputs for epochs:
 
@@ -341,7 +341,11 @@ Specifically, at logical time **T**, the receiver is permitted to evaluate resol
 t \in [T - W,\; T]
 \]
 
-where **W** is an experiment-defined constant (e.g., **W = 20** epochs). Epochs outside this window are **never inspected**.
+where **W** is an experiment-defined constant (e.g., **W = 20** epochs).
+
+Each inspected epoch yields **exactly one snapshot-valid, observation-only URL**.
+
+Epochs outside this window are **never inspected**.
 --
 
 ## Timeline (Asynchronous, No Coordination)
