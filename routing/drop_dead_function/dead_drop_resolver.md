@@ -170,9 +170,6 @@ Formally:
 
 Route(t, role) = (artifactClass, identifierTuple, URL_role)
 
-markdown
-Copy code
-
 All outputs are guaranteed to be:
 
 - snapshot-valid,
@@ -198,9 +195,6 @@ The shared digest is computed as:
 
 digest = H(t || senderID || receiverID)
 
-csharp
-Copy code
-
 All resolution decisions derive from fixed, non-overlapping slices of this digest.
 
 ## Artifact Resolution
@@ -214,8 +208,6 @@ classIndex = digest[0:8] mod |N_valid|
 Copy code
 artifactClass = N_valid[classIndex]
 
-sql
-Copy code
 
 Where N_valid includes only artifact classes with at least one valid identifier.
 
@@ -325,5 +317,3 @@ DeployStega enables asynchronous covert routing that is:
 - behaviorally indistinguishable from benign use,
 - reproducible,
 - and free from runtime coordination.
-
-This design is intentionally analytical, enabling rigorous detectability evaluation without conflating routing, synchronization, or messaging.
