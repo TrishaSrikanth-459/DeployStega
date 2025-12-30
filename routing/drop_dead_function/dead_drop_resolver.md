@@ -341,26 +341,23 @@ Specifically, at logical time **T**, the receiver is permitted to evaluate resol
 t \in [T - W,\; T]
 \]
 
-where **W** is an experiment-defined constant (e.g., **W = 20** epochs).
+where **W** is an experiment-defined constant (e.g., **W = 20** epochs). 
 
-Each inspected epoch yields **exactly one snapshot-valid, observation-only URL**.
+Each inspected epoch yields exactly one snapshot-valid, observation-only URL. Epochs outside this window are never inspected.
 
-Epochs outside this window are **never inspected**.
 --
 
 ## Timeline (Asynchronous, No Coordination)
 
-Time →
+PRE-EXPERIMENT (OFFLINE)
 ┌──────────────────────────────────────────────────────────────┐
-│ PRE-EXPERIMENT (OFFLINE) │
-│ │
 │ - GitHub token provided │
 │ - Repository enumerated │
 │ - Snapshot frozen │
 │ - Feasibility region learned │
 └──────────────────────────────────────────────────────────────┘
 
-    ↓ (no interaction)
+EXPERIMENT
 ┌──────────────────────┐ ┌──────────────────────┐
 │ Sender (independent) │ │ Receiver (independent)│
 │ │ │ │
