@@ -1,4 +1,4 @@
-markdown# DeployStega – Deterministic Dead-Drop Resolver
+# DeployStega – Deterministic Dead-Drop Resolver
 
 DeployStega is a **research framework** for evaluating the detectability of covert routing over benign GitHub activity.  
 It is **not a messaging system** and **does not guarantee delivery**.  
