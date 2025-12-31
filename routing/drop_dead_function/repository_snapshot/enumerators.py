@@ -3,21 +3,14 @@ enumerators.py
 
 Snapshot Construction Enumerators (REST API ONLY)
 
-This module performs authenticated, REST-API-based enumeration of GitHub
-repository artifacts for the sole purpose of constructing a fixed snapshot
-prior to experimentation.
-
 All enumeration occurs pre-experiment.
+Only REAL, addressable, identifier-valid artifacts are emitted.
 """
 
 from __future__ import annotations
 
 import os
-import time
-import json
-import random
-from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Iterable
+from typing import Dict, List, Any, Optional, Iterable, Set
 
 import requests
 
@@ -26,7 +19,7 @@ import requests
 # Configuration
 # -------------------------------------------------------------------
 
-REST_BASE_URL = os.getenv("GITHUB_REST_BASE_URL", "https://api.github.com")
+REST_BASE_URL = "https://api.github.com"
 TOKEN_ENV = "GITHUB_TOKEN"
 
 DEFAULT_HEADERS = {
@@ -74,28 +67,20 @@ class GitHubRESTClient:
 
             page += 1
 
-
-# -------------------------------------------------------------------
-# Abstract Enumerator
-# -------------------------------------------------------------------
-
-class ArtifactEnumerator(ABC):
-    def __init__(self, client: GitHubRESTClient):
-        self.client = client
-
-    @abstractmethod
-    def enumerate(self, owner: str, repo: str, **kwargs) -> List[Dict[str, Any]]:
-        pass
+    def get(self, path: str) -> Dict[str, Any]:
+        resp = self.session.get(f"{REST_BASE_URL}{path}")
+        resp.raise_for_status()
+        return resp.json()
 
 
 # -------------------------------------------------------------------
 # Enumerators
 # -------------------------------------------------------------------
 
-class RepositoryEnumerator(ArtifactEnumerator):
-    def enumerate(self, owner: str, repo: str, **_) -> List[Dict[str, Any]]:
+class RepositoryEnumerator:
+    def enumerate(self, owner: str, repo: str) -> List[Dict[str, Any]]:
         return [{
-            "artifactClass": "Repositories",
+            "artifactClass": "Repository",
             "identifierTuple": {
                 "owner": owner,
                 "repo": repo,
@@ -103,208 +88,153 @@ class RepositoryEnumerator(ArtifactEnumerator):
         }]
 
 
-class IssueEnumerator(ArtifactEnumerator):
-    def enumerate(
-        self,
-        owner: str,
-        repo: str,
-        max_pages: Optional[int] = None,
-        **_,
-    ) -> List[Dict[str, Any]]:
-        out = []
+class IssueEnumerator:
+    def __init__(self, client: GitHubRESTClient):
+        self.client = client
+
+    def enumerate(self, owner: str, repo: str) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+
         for issue in self.client.paginate(
             f"/repos/{owner}/{repo}/issues",
             params={"state": "all"},
-            max_pages=max_pages,
         ):
             if "pull_request" in issue:
                 continue
 
             out.append({
-                "artifactClass": "Issues",
+                "artifactClass": "Issue",
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
                     "issue_number": issue["number"],
                 }
             })
+
         return out
 
 
-class PullRequestEnumerator(ArtifactEnumerator):
-    def enumerate(
-        self,
-        owner: str,
-        repo: str,
-        max_pages: Optional[int] = None,
-        **_,
-    ) -> List[Dict[str, Any]]:
-        out = []
+class PullRequestEnumerator:
+    def __init__(self, client: GitHubRESTClient):
+        self.client = client
+
+    def enumerate(self, owner: str, repo: str) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+
         for pr in self.client.paginate(
             f"/repos/{owner}/{repo}/pulls",
             params={"state": "all"},
-            max_pages=max_pages,
         ):
             out.append({
-                "artifactClass": "PullRequests",
+                "artifactClass": "PullRequest",
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
                     "pull_number": pr["number"],
-                    "branch_1": pr["head"]["ref"],
-                    "branch_2": pr["base"]["ref"],
+                    "branch_1": pr["base"]["ref"],
+                    "branch_2": pr["head"]["ref"],
                 }
             })
+
         return out
 
 
-class IssueCommentEnumerator(ArtifactEnumerator):
-    def enumerate(
-        self,
-        owner: str,
-        repo: str,
-        max_pages: Optional[int] = None,
-        **_,
-    ) -> List[Dict[str, Any]]:
-        out = []
-        for comment in self.client.paginate(
-            f"/repos/{owner}/{repo}/issues/comments",
-            max_pages=max_pages,
+class CommitEnumerator:
+    """
+    STRICT commit enumerator.
+
+    Emits a Commit ONLY if:
+    - branch is concrete
+    - path is concrete
+    - commit_sha is concrete
+    - resulting edit/new URL is valid
+    """
+
+    def __init__(self, client: GitHubRESTClient):
+        self.client = client
+
+    def enumerate(self, owner: str, repo: str) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        seen: Set[tuple] = set()
+
+        # Enumerate branches
+        for branch_obj in self.client.paginate(
+            f"/repos/{owner}/{repo}/branches"
         ):
-            issue_url = comment["issue_url"]
-            issue_number = int(issue_url.rstrip("/").split("/")[-1])
+            branch = branch_obj.get("name")
+            if not branch:
+                continue
 
-            out.append({
-                "artifactClass": "IssueComments",
-                "identifierTuple": {
-                    "owner": owner,
-                    "repo": repo,
-                    "issue_number": issue_number,
-                }
-            })
+            # Enumerate commits on branch
+            for commit in self.client.paginate(
+                f"/repos/{owner}/{repo}/commits",
+                params={"sha": branch},
+            ):
+                commit_sha = commit.get("sha")
+                if not commit_sha:
+                    continue
+
+                # Fetch full commit details (REQUIRED for files)
+                try:
+                    details = self.client.get(
+                        f"/repos/{owner}/{repo}/commits/{commit_sha}"
+                    )
+                except requests.HTTPError:
+                    continue
+
+                files = details.get("files")
+                if not files:
+                    continue
+
+                for f in files:
+                    path = f.get("filename")
+                    if not path:
+                        continue
+
+                    key = (branch, path, commit_sha)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    out.append({
+                        "artifactClass": "Commit",
+                        "identifierTuple": {
+                            "owner": owner,
+                            "repo": repo,
+                            "branch": branch,
+                            "path": path,
+                            "commit_sha": commit_sha,
+                        }
+                    })
+
         return out
-
-
-class CommitEnumerator(ArtifactEnumerator):
-    def enumerate(
-        self,
-        owner: str,
-        repo: str,
-        max_pages: Optional[int] = None,
-        **_,
-    ) -> List[Dict[str, Any]]:
-        out = []
-        for commit in self.client.paginate(
-            f"/repos/{owner}/{repo}/commits",
-            max_pages=max_pages,
-        ):
-            out.append({
-                "artifactClass": "Commits",
-                "identifierTuple": {
-                    "owner": owner,
-                    "repo": repo,
-                    "branch": commit["commit"]["tree"]["sha"],
-                    "path": "",
-                    "commit_sha": commit["sha"],
-                }
-            })
-        return out
-
-
-class CommitCommentEnumerator(ArtifactEnumerator):
-    def enumerate(
-        self,
-        owner: str,
-        repo: str,
-        max_pages: Optional[int] = None,
-        **_,
-    ) -> List[Dict[str, Any]]:
-        out = []
-        for comment in self.client.paginate(
-            f"/repos/{owner}/{repo}/comments",
-            max_pages=max_pages,
-        ):
-            out.append({
-                "artifactClass": "CommitComments",
-                "identifierTuple": {
-                    "owner": owner,
-                    "repo": repo,
-                    "commit_sha": comment["commit_id"],
-                }
-            })
-        return out
-
-
-# -------------------------------------------------------------------
-# Registry
-# -------------------------------------------------------------------
-
-ARTIFACT_ENUMERATOR_REGISTRY = {
-    "Repositories": RepositoryEnumerator,
-    "Issues": IssueEnumerator,
-    "PullRequests": PullRequestEnumerator,
-    "IssueComments": IssueCommentEnumerator,
-    "CommitComments": CommitCommentEnumerator,
-    "Commits": CommitEnumerator,
-}
 
 
 # -------------------------------------------------------------------
 # Snapshot Builder
 # -------------------------------------------------------------------
 
-def build_snapshot(
-    owner: str,
-    repo: str,
-    limits: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-
+def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
     token = os.getenv(TOKEN_ENV)
     if not token:
         raise RuntimeError(f"Set {TOKEN_ENV} with a GitHub access token")
 
     client = GitHubRESTClient(token)
-    limits = limits or {}
 
-    snapshot = {
-        "repo": {"owner": owner, "repo": repo},
-        "generated_at": int(time.time()),
-        "artifacts": {},
+    snapshot: Dict[str, Any] = {
+        "artifacts": {}
     }
 
-    for name, enum_cls in ARTIFACT_ENUMERATOR_REGISTRY.items():
-        enum = enum_cls(client)
-        snapshot["artifacts"][name] = enum.enumerate(
-            owner, repo, **limits.get(name, {})
-        )
+    snapshot["artifacts"]["Repository"] = RepositoryEnumerator().enumerate(owner, repo)
+    snapshot["artifacts"]["Issue"] = IssueEnumerator(client).enumerate(owner, repo)
+    snapshot["artifacts"]["PullRequest"] = PullRequestEnumerator(client).enumerate(owner, repo)
+    snapshot["artifacts"]["Commit"] = CommitEnumerator(client).enumerate(owner, repo)
+
+    # HARD FILTER: remove empty artifact classes
+    snapshot["artifacts"] = {
+        cls: items
+        for cls, items in snapshot["artifacts"].items()
+        if items
+    }
 
     return snapshot
-
-
-def write_snapshot(snapshot: Dict[str, Any], path: str) -> None:
-    with open(path, "w") as f:
-        json.dump(snapshot, f, indent=2)
-
-
-# -------------------------------------------------------------------
-# CLI
-# -------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import argparse
-
-    p = argparse.ArgumentParser()
-    p.add_argument("--owner", required=True)
-    p.add_argument("--repo", required=True)
-    p.add_argument("--out", default="snapshot.json")
-    p.add_argument("--max-pages", type=int, default=None)
-    args = p.parse_args()
-
-    limits = {}
-    if args.max_pages is not None:
-        for k in ARTIFACT_ENUMERATOR_REGISTRY:
-            limits[k] = {"max_pages": args.max_pages}
-
-    snap = build_snapshot(args.owner, args.repo, limits=limits)
-    write_snapshot(snap, args.out)
-    print(f"Snapshot written to {args.out}")
