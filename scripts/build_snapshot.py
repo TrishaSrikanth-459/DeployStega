@@ -69,7 +69,7 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
     - All identifiers are real and addressable
     - No placeholder values
     - No inferred paths or branches
-    - Snapshot is namespace-accurate
+    - Snapshot format matches RepositorySnapshot.from_enumeration
     """
 
     artifacts: Dict[str, List[Dict[str, Any]]] = {
@@ -81,10 +81,11 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
     # --------------------------------------------------------------
 
     artifacts["Repository"].append({
+        "artifactClass": "Repository",
         "identifierTuple": {
             "owner": owner,
             "repo": repo,
-        }
+        },
     })
 
     # --------------------------------------------------------------
@@ -102,21 +103,23 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
         issue_number = issue["number"]
 
         artifacts["Issue"].append({
+            "artifactClass": "Issue",
             "identifierTuple": {
                 "owner": owner,
                 "repo": repo,
                 "issue_number": issue_number,
-            }
+            },
         })
 
         comments = paginated_get(issue["comments_url"])
         if comments:
             artifacts["IssueComment"].append({
+                "artifactClass": "IssueComment",
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
                     "issue_number": issue_number,
-                }
+                },
             })
 
     # --------------------------------------------------------------
@@ -133,27 +136,29 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
         head = pr["head"]["ref"]
 
         artifacts["PullRequest"].append({
+            "artifactClass": "PullRequest",
             "identifierTuple": {
                 "owner": owner,
                 "repo": repo,
                 "pull_number": pull_number,
                 "branch_1": base,
                 "branch_2": head,
-            }
+            },
         })
 
         comments = paginated_get(pr["_links"]["comments"]["href"])
         if comments:
             artifacts["PullRequestComment"].append({
+                "artifactClass": "PullRequestComment",
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
                     "pull_number": pull_number,
-                }
+                },
             })
 
     # --------------------------------------------------------------
-    # Commits + CommitComments (SAFE & ADDRESSABLE)
+    # Commits + CommitComments (STRICT & ADDRESSABLE)
     # --------------------------------------------------------------
 
     branches = paginated_get(
@@ -164,36 +169,40 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
         branch = branch_obj["name"]
         commit_sha = branch_obj["commit"]["sha"]
 
-        # Resolve commit → tree SHA
         commit_data = requests.get(
             f"{GITHUB_API}/repos/{owner}/{repo}/git/commits/{commit_sha}",
             headers=_auth_headers(),
-        ).json()
+        )
+        commit_data.raise_for_status()
+        commit_json = commit_data.json()
 
-        tree_sha = commit_data["tree"]["sha"]
+        tree_sha = commit_json["tree"]["sha"]
 
-        tree = requests.get(
+        tree_resp = requests.get(
             f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{tree_sha}",
             headers=_auth_headers(),
             params={"recursive": 1},
-        ).json()
+        )
+        tree_resp.raise_for_status()
+        tree = tree_resp.json()
 
         paths = [
             t["path"]
             for t in tree.get("tree", [])
-            if t.get("type") == "blob"
+            if t.get("type") == "blob" and isinstance(t.get("path"), str)
         ]
 
-        # Bound enumeration to small, real subset
+        # Emit only fully valid commit identifiers
         for path in paths[:5]:
             artifacts["Commit"].append({
+                "artifactClass": "Commit",
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
                     "branch": branch,
                     "path": path,
                     "commit_sha": commit_sha,
-                }
+                },
             })
 
         comments = paginated_get(
@@ -202,20 +211,19 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
 
         if comments:
             artifacts["CommitComment"].append({
+                "artifactClass": "CommitComment",
                 "identifierTuple": {
                     "owner": owner,
                     "repo": repo,
                     "commit_sha": commit_sha,
-                }
+                },
             })
 
     # --------------------------------------------------------------
     # HARD FILTER: drop empty classes
     # --------------------------------------------------------------
 
-    artifacts = {
-        k: v for k, v in artifacts.items() if v
-    }
+    artifacts = {k: v for k, v in artifacts.items() if v}
 
     if not artifacts:
         raise RuntimeError("Snapshot contains no valid artifacts")
@@ -241,3 +249,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
