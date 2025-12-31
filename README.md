@@ -43,7 +43,7 @@ Required fields:
 - `participants.sender.id`
 - `participants.receiver.id`
 
-### 3. Bootstrap Participant IDs (Optional)
+### 3. Bootstrap Participant IDs (Once)
 
 Generate fresh opaque session identifiers:
 ```bash
@@ -60,7 +60,7 @@ This will populate:
 - Sender ID → sender
 - Receiver ID → receiver
 
-### 5. Build the Repository Snapshot (Offline, Once)
+### 5. Build the Repository Snapshot (Once)
 
 Enumerate real, addressable GitHub artifacts and freeze them into a snapshot:
 ```bash
