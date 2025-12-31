@@ -12,12 +12,14 @@ The resolver maps **shared cryptographic inputs** and a **pre-established experi
 
 at a logical epoch index `t`.
 
-The resolver guarantees that for any fixed epoch index t, the sender and receiver independently derive:
-- the same artifact identifier tuple, and
-- different role-appropriate interaction surfaces (mutation vs. observation).
+The resolver guarantees that for any fixed epoch index `t`, the sender and receiver independently derive:
+
+- the **same artifact identifier tuple**, and
+- **different role-appropriate interaction surfaces** (mutation vs. observation),
+
 without runtime communication, acknowledgments, or feedback.
 
-If sender and receiver evaluate different epoch indices, no agreement is expected.
+If the sender and receiver evaluate **different epoch indices**, no agreement is expected.
 
 The resolver is a **pure deterministic function** evaluated under externally supplied feasibility constraints.
 
@@ -31,8 +33,8 @@ The following items **are shared out of band**:
 
 - the **repository snapshot**,
 - the **dead-drop resolver algorithm**,
-- the **steganographic encoding algorithm** (to the sender)
-- The **steganographic decoding key** (to the receiver)
+- the **steganographic encoding algorithm** (to the sender),
+- the **steganographic decoding key** (to the receiver),
 - the **epoch definition**, including:
   - epoch duration (e.g., 3 minutes),
   - epoch origin time `T₀`,
@@ -46,8 +48,7 @@ The following items are **not shared out of band**:
 - which epoch contains a payload,
 - whether any given epoch contains a payload at all.
 
-This separation is essential:
-DeployStega does not attempt to conceal out-of-band setup assumptions, which are assumed to be exchanged privately and are outside the threat model.
+This separation is essential: DeployStega does **not** attempt to conceal out-of-band setup assumptions, which are assumed to be exchanged privately and are **outside the threat model**.
 
 ---
 
@@ -57,14 +58,31 @@ DeployStega does not attempt to conceal out-of-band setup assumptions, which are
 
 An **epoch** is a logical index defined as:
 
-t = floor((current_time − T₀) / epoch_duration)
+t = floor((current_unix_time − T₀) / epoch_duration_seconds)
 
-- `T₀` is a fixed, agreed-upon start time.
-- `epoch_duration` is fixed for the experiment.
-- No live messages between the sender and receiver are exchanged at runtime.
-- Clock drift tolerance is absorbed by the receiver’s inspection window.
+where:
 
-Epochs are **indices**, not events.
+- **`T₀` (epoch origin)** is a fixed Unix timestamp agreed upon out of band,
+- **`epoch_duration_seconds`** is fixed for the experiment,
+- **`current_unix_time`** is obtained locally at runtime.
+
+Epochs are **indices, not events**:
+- They do not imply that a sender acted.
+- They merely select a deterministic rendezvous candidate.
+
+No live messages between the sender and receiver are exchanged at runtime.  
+Clock drift is tolerated by the receiver’s inspection window.
+
+### Epoch Visibility at Runtime
+
+The interactive console may display a **current logical epoch** value.  
+This epoch is:
+
+- **derived automatically**, not user-specified,
+- **deterministically computed** from wall-clock time,
+- **not negotiated or transmitted** between parties.
+
+If sender and receiver compute different epoch indices, **no coordination or agreement is expected**.
 
 ---
 
@@ -112,7 +130,7 @@ The resolver never emits URLs outside this region.
 
 At runtime, each party independently provides:
 
-- epoch index `t`,
+- epoch index `t` (computed locally),
 - `senderID`,
 - `receiverID`,
 - role (`sender` or `receiver`).
@@ -127,6 +145,9 @@ For each `(t, role)`, the resolver outputs exactly one triple:
 
 (artifactClass, identifierTuple, URL_role)
 
+yaml
+Copy code
+
 All outputs are:
 
 - snapshot-valid,
@@ -135,11 +156,14 @@ All outputs are:
 
 ---
 
-## Resolver Leverages Deterministic PRNG 
+## Resolver Leverages Deterministic PRNG
 
-A cryptographic hash function `H` is used as a deterministic PRNG.
+A cryptographic hash function `H` is used as a deterministic PRNG:
 
 digest = H(t || senderID || receiverID)
+
+yaml
+Copy code
 
 All selection decisions derive from fixed slices of this digest.
 
@@ -171,7 +195,7 @@ For each resolved candidate artifact:
 2. The receiver extracts a candidate payload.
 3. The receiver attempts steganographic decoding.
 4. If decoding produces unintelligible text, the artifact is treated as benign.
-5. If decoding produces a legigible message, the payload is accepted as the sender’s message.
+5. If decoding produces legible text, the payload is accepted as the sender’s message.
 
 No acknowledgments, retries, or signaling occur.
 
@@ -184,6 +208,9 @@ The receiver may inspect a **finite window of past epochs**.
 At logical time `T`, the receiver evaluates epochs:
 
 t ∈ [T − W, T]
+
+markdown
+Copy code
 
 where:
 
