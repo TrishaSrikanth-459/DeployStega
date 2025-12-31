@@ -347,24 +347,24 @@ Each inspected epoch yields exactly one snapshot-valid, observation-only URL. Ep
 
 ## Timeline (Asynchronous, No Coordination)
 
-PRE-EXPERIMENT (OFFLINE)
-┌──────────────────────────────────────────────────────────────┐
-│ - GitHub token provided │
-│ - Repository enumerated │
-│ - Snapshot frozen │
-│ - Feasibility region learned │
-└──────────────────────────────────────────────────────────────┘
+### Pre-Experiment (Offline)
 
-EXPERIMENT
-┌──────────────────────┐ ┌──────────────────────┐
-│ Sender (independent) │ │ Receiver (independent)│
-│ │ │ │
-│ Resolve(t) │ │ Resolve(t) │
-│ Mutate artifact │ │ Observe artifact │
-│ at some time within │ │ at any later time │
-│ epoch t │ │ (t, t+1, t+2, …) │
-└──────────────────────┘ └──────────────────────┘
+- GitHub token provided
+- Repository enumerated
+- Snapshot frozen
+- Feasibility region learned
 
+### Experiment Phase
+
+**Sender (independent):**
+- Resolves the dead drop for epoch *t*
+- Mutates the resolved artifact
+- Performs the mutation at some time within epoch *t*
+
+**Receiver (independent):**
+- Resolves the dead drop for epoch *t*
+- Observes the resolved artifact
+- May observe that same artifact at any later time:
 
 There is **no runtime synchronization**, acknowledgment, or feedback.
 
