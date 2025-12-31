@@ -337,15 +337,13 @@ The receiver may deterministically resolve and inspect artifacts corresponding t
 
 Specifically, at logical time **T**, the receiver is permitted to evaluate resolver outputs for epochs:
 
-\[
-t \in [T - W,\; T]
-\]
+t ∈ [T − W, T]
 
 where **W** is an experiment-defined constant (e.g., **W = 20** epochs). 
 
 Each inspected epoch yields exactly one snapshot-valid, observation-only URL. Epochs outside this window are never inspected.
 
---
+---
 
 ## Timeline (Asynchronous, No Coordination)
 
