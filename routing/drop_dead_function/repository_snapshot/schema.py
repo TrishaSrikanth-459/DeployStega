@@ -2,15 +2,17 @@
 schema.py
 
 Structural schemas for GitHub artifact identifiers,
-exactly as defined in namespace.md.
+exactly as defined in the DeployStega routing namespace.
 
 This module defines:
-- Artifact classes
+- Artifact classes (canonical, singular)
 - Ordered identifier fields per artifact
 - No addressability logic
 - No behavior
 - No snapshot acquisition
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
@@ -23,22 +25,24 @@ from typing import Tuple, Dict
 
 class ArtifactClass(Enum):
     """
-    IMPORTANT INVARIANT:
+    Canonical routing namespace artifact classes.
 
-    - Enum MEMBER NAMES must exactly match snapshot JSON keys
-      because the serializer uses ArtifactClass[class_name]
-    - Enum VALUES preserve canonical semantic labels
+    IMPORTANT:
+    - Enum *names* are the canonical class names (and snapshot schema keys)
+    - Enum *values* are descriptive only
+    - Names are singular by design
     """
 
-    Repositories = "repository"
-    Issues = "issue"
-    PullRequests = "pull_request"
-    Commits = "commit"
-    IssueComments = "issue_comment"
-    PRComments = "pull_request_comment"
-    CommitComments = "commit_comment"
-    Discussions = "discussion"
-    DiscussionComments = "discussion_comment"
+    Repository = "repository"
+
+    Issue = "issue"
+    IssueComment = "issue_comment"
+
+    PullRequest = "pull_request"
+    PullRequestComment = "pull_request_comment"
+
+    Commit = "commit"
+    CommitComment = "commit_comment"
 
 
 # =========================
@@ -68,11 +72,11 @@ class ArtifactIdentifierSchema:
 
 
 # =========================
-# Canonical Schemas
+# Canonical Schemas (namespace-accurate)
 # =========================
 
 REPOSITORY_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.Repositories,
+    artifact_class=ArtifactClass.Repository,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
@@ -80,7 +84,16 @@ REPOSITORY_SCHEMA = ArtifactIdentifierSchema(
 )
 
 ISSUE_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.Issues,
+    artifact_class=ArtifactClass.Issue,
+    fields=(
+        IdentifierField("owner", "string"),
+        IdentifierField("repo", "string"),
+        IdentifierField("issue_number", "integer"),
+    ),
+)
+
+ISSUE_COMMENT_SCHEMA = ArtifactIdentifierSchema(
+    artifact_class=ArtifactClass.IssueComment,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
@@ -89,7 +102,18 @@ ISSUE_SCHEMA = ArtifactIdentifierSchema(
 )
 
 PULL_REQUEST_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.PullRequests,
+    artifact_class=ArtifactClass.PullRequest,
+    fields=(
+        IdentifierField("owner", "string"),
+        IdentifierField("repo", "string"),
+        IdentifierField("pull_number", "integer"),
+        IdentifierField("branch_1", "string"),  # target branch (base)
+        IdentifierField("branch_2", "string"),  # source branch (head)
+    ),
+)
+
+PULL_REQUEST_COMMENT_SCHEMA = ArtifactIdentifierSchema(
+    artifact_class=ArtifactClass.PullRequestComment,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
@@ -98,60 +122,22 @@ PULL_REQUEST_SCHEMA = ArtifactIdentifierSchema(
 )
 
 COMMIT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.Commits,
+    artifact_class=ArtifactClass.Commit,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
+        IdentifierField("branch", "string"),
+        IdentifierField("path", "string"),
         IdentifierField("commit_sha", "hash"),
-    ),
-)
-
-ISSUE_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.IssueComments,
-    fields=(
-        IdentifierField("owner", "string"),
-        IdentifierField("repo", "string"),
-        IdentifierField("issue_number", "integer"),
-        IdentifierField("comment_id", "integer"),
-    ),
-)
-
-PULL_REQUEST_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.PRComments,
-    fields=(
-        IdentifierField("owner", "string"),
-        IdentifierField("repo", "string"),
-        IdentifierField("pull_number", "integer"),
-        IdentifierField("comment_id", "integer"),
     ),
 )
 
 COMMIT_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.CommitComments,
+    artifact_class=ArtifactClass.CommitComment,
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("commit_sha", "hash"),
-        IdentifierField("comment_id", "integer"),
-    ),
-)
-
-DISCUSSION_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.Discussions,
-    fields=(
-        IdentifierField("owner", "string"),
-        IdentifierField("repo", "string"),
-        IdentifierField("discussion_number", "integer"),
-    ),
-)
-
-DISCUSSION_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.DiscussionComments,
-    fields=(
-        IdentifierField("owner", "string"),
-        IdentifierField("repo", "string"),
-        IdentifierField("discussion_number", "integer"),
-        IdentifierField("comment_id", "integer"),
     ),
 )
 
@@ -161,18 +147,16 @@ DISCUSSION_COMMENT_SCHEMA = ArtifactIdentifierSchema(
 # =========================
 
 SCHEMA_REGISTRY: Dict[ArtifactClass, ArtifactIdentifierSchema] = {
-    schema.artifact_class: schema
-    for schema in (
-        REPOSITORY_SCHEMA,
-        ISSUE_SCHEMA,
-        PULL_REQUEST_SCHEMA,
-        COMMIT_SCHEMA,
-        ISSUE_COMMENT_SCHEMA,
-        PULL_REQUEST_COMMENT_SCHEMA,
-        COMMIT_COMMENT_SCHEMA,
-        DISCUSSION_SCHEMA,
-        DISCUSSION_COMMENT_SCHEMA,
-    )
+    ArtifactClass.Repository: REPOSITORY_SCHEMA,
+
+    ArtifactClass.Issue: ISSUE_SCHEMA,
+    ArtifactClass.IssueComment: ISSUE_COMMENT_SCHEMA,
+
+    ArtifactClass.PullRequest: PULL_REQUEST_SCHEMA,
+    ArtifactClass.PullRequestComment: PULL_REQUEST_COMMENT_SCHEMA,
+
+    ArtifactClass.Commit: COMMIT_SCHEMA,
+    ArtifactClass.CommitComment: COMMIT_COMMENT_SCHEMA,
 }
 
 
@@ -180,4 +164,9 @@ def get_schema(artifact_class: ArtifactClass) -> ArtifactIdentifierSchema:
     """
     Retrieve the canonical identifier schema for an artifact class.
     """
-    return SCHEMA_REGISTRY[artifact_class]
+    try:
+        return SCHEMA_REGISTRY[artifact_class]
+    except KeyError as e:
+        raise KeyError(
+            f"No identifier schema registered for artifact class: {artifact_class}"
+        ) from e
