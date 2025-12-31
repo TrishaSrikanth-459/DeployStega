@@ -50,7 +50,9 @@ Required fields:
 ```json
 {
   "experiment_id": "deploystega-test-001",
+
   "snapshot": "experiments/snapshot.json",
+
   "participants": {
     "sender": {
       "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -59,8 +61,9 @@ Required fields:
       "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
   },
+
   "epoch": {
-    "origin_time_utc": "2025-01-01T00:00:00Z",
+    "origin_unix": 1735689600,
     "duration_seconds": 180,
     "inspection_window": 20
   }
