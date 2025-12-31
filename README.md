@@ -1,4 +1,112 @@
-# DeployStega: A Systemic Framework for Covert Communication via Large Language Models
+# DeployStega – Deterministic Dead-Drop Resolver
 
-Covert communication with large language models (LLMs) is often evaluated through isolated encoding events, emphasizing fluency or KL divergence. Real deployments, however, occur within LLM-mediated environments, where adversaries observe both linguistic output as well as user behavior, timing patterns, and routing activity. DeployStega reframes covert communication as a system-level problem by defining suspiciousness relative to an adversarial capability class F, which encompasses both semantic and behavioral observables. In accordance with differential-privacy techniques, a covert user is secure only if replacing a small portion of benign users’ Github logs with covert logs, which contain synthetically generated behavior, routing, and stegotext, does not markedly shift adversarial features. 
-DeployStega achieves behavioral indistinguishability by generating user actions that follow benign multi-scale temporal patterns. Further, it achieves routing indistinguishability by employing an application-layer dead-drop model, allowing the sender and receiver to asynchronously access shared artifacts in a manner indistinguishable from routine workspace activity. Taken together, DeployStega provides the first capability-relative, environment-embedded framework for covert communication, integrating linguistic steganography, behavioral modeling, and routing into a unified evaluation methodology. Our evaluation quantifies semantic, behavioral, and cross-layer detectability using an empirical ε derived from adversarial classifier advantage, establishing an operational criterion for covert feasibility.
+DeployStega is a **research framework** for evaluating the detectability of covert routing over benign GitHub activity.  
+It is **not a messaging system** and **does not guarantee delivery**.  
+It provides *verifiable rendezvous* under strict, explicit assumptions.
+
+---
+
+## Prerequisites
+
+- Python **3.10+**
+- A GitHub account
+- A GitHub **personal access token**
+  - For **private repositories**, the token must have access
+  - The **sender must be a collaborator** with write permissions
+
+## Set your token:
+```bash
+export GITHUB_TOKEN=YOUR_TOKEN_HERE
+
+## Step-by-Step Usage:
+1. **Clone the Repository**
+- git clone https://github.com/<your-org-or-username>/DeployStega.git
+- cd DeployStega
+
+2. **Prepare the Experiment Manifest**:
+- Create or edit: experiments/experiment_manifest.json
+  - Required fields:
+    - experiment_id
+    - snapshot (path to snapshot JSON)
+    - participants.sender.id
+    - participants.receiver.id
+
+3. **Bootstrap Participant IDs (Optional)**
+- Generate fresh opaque session identifiers:
+  - python scripts/bootstrap_experiment.py
+  - This will populate:
+    - participants.sender.id
+    - participants.receiver.id
+
+4. **Distribute**:
+- Sender ID → sender
+- Receiver ID → receiver
+
+5. **Build the Repository Snapshot (Offline, Once)**
+Enumerate real, addressable GitHub artifacts and freeze them into a snapshot:
+- python scripts/build_snapshot.py
+- This step:
+  - Uses the GitHub REST API
+  - Emits only schema-valid, concrete identifiers
+  - Rejects placeholders (e.g., "unknown")
+  - Writes the snapshot to the path specified in the manifest
+⚠️ No enumeration or API calls occur after this step.
+
+6. **Run the Dead-Drop Resolver (Runtime)**
+Each participant independently runs:
+- python scripts/interactive_dead_drop.py
+- Inside the console:
+  - Confirm collaborator/write-access requirement
+  - Select role (sender or receiver)
+  - Enter your role-specific ID
+  - Enter an epoch index (integer)
+
+The resolver outputs:
+- Artifact class
+- Identifier tuple
+- Exactly one role-appropriate GitHub URL
+- Exactly one action sequence
+
+Sender Workflow:
+- Run the resolver as sender
+- Open the resolved URL
+- Perform the instructed mutation (edit, create, comment, etc.)
+- Exit — no signaling, acknowledgments, or retries
+
+Receiver Workflow
+- Run the resolver as receiver
+- Open the resolved URL
+- Attempt steganographic decoding
+- Apply decode-or-discard:
+- Decode fails → treat artifact as benign
+- Decode succeeds → accept message
+- Optionally inspect previous epochs within the experiment’s window
+
+**Key Properties**
+- Deterministic resolution
+- No runtime coordination
+- No live network queries
+- No invalid or placeholder URLs
+- Snapshot-valid, schema-conformant identifiers only
+- Verifiable rendezvous, not guaranteed delivery
+
+**Epoch Model**:
+- Epochs are logical indices, not synchronized events
+- Epoch definition is agreed out-of-band
+- Receiver may inspect epochs within a bounded window [T − W, T]
+- Clock drift is tolerated via window size
+
+**Research Scope**:
+DeployStega is intended for:
+- Detectability analysis
+- Behavioral plausibility evaluation
+- Controlled covert-routing experiments
+
+**It is not intended for**:
+- Production deployment
+- Guaranteed message delivery
+- Real-time communication
+
+License
+Research use only.
+See LICENSE for details.
