@@ -4,9 +4,17 @@ github_url_builder.py
 Canonical GitHub URL construction for routing artifacts.
 
 This module:
-- Maps artifact classes to URL constructors
+- Maps ArtifactClass.name → URL constructors
 - Enforces role validity
-- Contains NO snapshot or feasibility logic
+- Constructs ONLY schema-valid, identifier-faithful URLs
+- NEVER invents or repairs identifiers
+- NEVER emits placeholder URLs
+- Returns [] if no namespace-valid URL exists for (class, identifier, role)
+
+Non-responsibilities:
+- No snapshot logic
+- No feasibility logic
+- No routing logic
 """
 
 from __future__ import annotations
@@ -20,18 +28,20 @@ class GitHubURLBuilder:
     """
     Construct role-appropriate GitHub URLs for artifacts.
 
-    IMPORTANT INVARIANT:
-    - artifact_class MUST be the canonical ArtifactClass.name
-      (e.g. "Issues", "PullRequests")
+    HARD INVARIANTS:
+    - artifact_class MUST equal ArtifactClass.name
+    - identifier MUST already be schema-valid
+    - NO URL containing 'unknown' may be constructed
+    - If a role has NO valid URL surface, return []
     """
 
     def __init__(self, *, owner: str, repo: str):
         self.owner = owner
         self.repo = repo
 
-    # ---------------------------------------------------------
+    # =========================================================
     # Public API
-    # ---------------------------------------------------------
+    # =========================================================
 
     def urls_for(
         self,
@@ -39,98 +49,139 @@ class GitHubURLBuilder:
         identifier: Tuple,
         role: Role,
     ) -> List[str]:
-        """
-        Return all GitHub URLs for the artifact identifier that are allowed
-        by the routing namespace spec for the given role.
-        """
         role = self._validate_role(role)
 
         handler = self._handlers().get(artifact_class)
         if handler is None:
             raise KeyError(f"No URL handler for artifact class: {artifact_class}")
 
-        return handler(identifier, role)
+        urls = handler(identifier, role)
 
-    # ---------------------------------------------------------
-    # Handler registry (CANONICAL)
-    # ---------------------------------------------------------
+        # HARD SAFETY: never emit invalid or placeholder URLs
+        for url in urls:
+            if not isinstance(url, str) or not url.strip():
+                raise RuntimeError(f"Invalid URL constructed: {url}")
+            if "unknown" in url:
+                raise RuntimeError(
+                    f"Invalid URL constructed (contains 'unknown'): {url}"
+                )
+
+        return urls
+
+    # =========================================================
+    # Handler registry
+    # =========================================================
 
     def _handlers(self) -> Dict[str, Callable[[Tuple, Role], List[str]]]:
-        """
-        Map canonical artifact class names to URL handlers.
-        """
         return {
-            "Repositories": self._repository_urls,
-            "Issues": self._issue_urls,
-            "PullRequests": self._pull_request_urls,
-            "Commits": self._commit_urls,
-            "IssueComments": self._issue_comment_urls,
-            "PRComments": self._pull_request_comment_urls,
-            "CommitComments": self._commit_comment_urls,
-            "Discussions": self._discussion_urls,
-            "DiscussionComments": self._discussion_comment_urls,
+            "Repository": self._repository_urls,
+            "Issue": self._issue_urls,
+            "IssueComment": self._issue_comment_urls,
+            "PullRequest": self._pull_request_urls,
+            "PullRequestComment": self._pull_request_comment_urls,
+            "Commit": self._commit_urls,
+            "CommitComment": self._commit_comment_urls,
         }
 
-    # ---------------------------------------------------------
+    # =========================================================
     # URL handlers
-    # ---------------------------------------------------------
+    # =========================================================
+
+    # -------------------------
+    # Repository
+    # -------------------------
 
     def _repository_urls(self, identifier: Tuple, role: Role) -> List[str]:
+        # identifier = (owner, repo)
         return [
             f"https://github.com/{self.owner}/{self.repo}"
         ]
 
+    # -------------------------
+    # Issue
+    # -------------------------
+
     def _issue_urls(self, identifier: Tuple, role: Role) -> List[str]:
+        # identifier = (owner, repo, issue_number)
         _, _, issue_number = identifier
         return [
             f"https://github.com/{self.owner}/{self.repo}/issues/{issue_number}"
         ]
 
+    # -------------------------
+    # Issue Comment
+    # -------------------------
+
+    def _issue_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
+        # identifier = (owner, repo, issue_number)
+        _, _, issue_number = identifier
+        return [
+            f"https://github.com/{self.owner}/{self.repo}/issues/{issue_number}"
+        ]
+
+    # -------------------------
+    # Pull Request
+    # -------------------------
+
     def _pull_request_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        _, _, pull_number = identifier
+        # identifier = (owner, repo, pull_number, branch_1, branch_2)
+        _, _, pull_number, _, _ = identifier
         return [
             f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}"
         ]
 
+    # -------------------------
+    # Pull Request Comment
+    # -------------------------
+
+    def _pull_request_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
+        # identifier = (owner, repo, pull_number)
+        _, _, pull_number = identifier
+
+        # Namespace-valid options; resolver will choose exactly ONE
+        return [
+            f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}",
+            f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}/files",
+        ]
+
+    # -------------------------
+    # Commit
+    # -------------------------
+
     def _commit_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        *_, commit_sha = identifier
+        # identifier = (owner, repo, branch, path, commit_sha)
+        _, _, branch, path, commit_sha = identifier
+
+        # Absolute requirement: branch and path must be concrete
+        if not branch or not path:
+            return []
+
+        if role == "sender":
+            # Sender-side commit creation surfaces
+            return [
+                f"https://github.com/{self.owner}/{self.repo}/edit/{branch}/{path}",
+                f"https://github.com/{self.owner}/{self.repo}/new/{branch}/{path}",
+            ]
+
+        # Receiver observes immutable commit
         return [
             f"https://github.com/{self.owner}/{self.repo}/commit/{commit_sha}"
         ]
 
-    def _issue_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        _, _, issue_number, comment_id = identifier
-        return [
-            f"https://github.com/{self.owner}/{self.repo}/issues/{issue_number}#issuecomment-{comment_id}"
-        ]
-
-    def _pull_request_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        _, _, pull_number, comment_id = identifier
-        return [
-            f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}#discussion_r{comment_id}"
-        ]
+    # -------------------------
+    # Commit Comment
+    # -------------------------
 
     def _commit_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        *_, commit_sha, comment_id = identifier
+        # identifier = (owner, repo, commit_sha)
+        _, _, commit_sha = identifier
         return [
-            f"https://github.com/{self.owner}/{self.repo}/commit/{commit_sha}#commitcomment-{comment_id}"
+            f"https://github.com/{self.owner}/{self.repo}/commit/{commit_sha}"
         ]
 
-    def _discussion_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        _, _, discussion_number = identifier
-        return [
-            f"https://github.com/{self.owner}/{self.repo}/discussions/{discussion_number}"
-        ]
-
-    def _discussion_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        _, _, discussion_number, comment_id = identifier
-        return [
-            f"https://github.com/{self.owner}/{self.repo}/discussions/{discussion_number}#discussioncomment-{comment_id}"
-        ]
-
-    # ---------------------------------------------------------
+    # =========================================================
     # Role validation
-    # ---------------------------------------------------------
+    # =========================================================
 
     @staticmethod
     def _validate_role(role: Role) -> Role:
