@@ -148,9 +148,6 @@ For each `(t, role)`, the resolver outputs exactly one triple:
 
 (artifactClass, identifierTuple, URL_role)
 
-yaml
-Copy code
-
 All outputs are:
 
 - snapshot-valid,
@@ -164,9 +161,6 @@ All outputs are:
 A cryptographic hash function `H` is used as a deterministic PRNG:
 
 digest = H(t || senderID || receiverID)
-
-yaml
-Copy code
 
 All selection decisions derive from fixed slices of this digest.
 
@@ -211,9 +205,6 @@ The receiver may inspect a **finite window of past epochs**.
 At logical time `T`, the receiver evaluates epochs:
 
 t ∈ [T − W, T]
-
-markdown
-Copy code
 
 where:
 
