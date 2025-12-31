@@ -1,4 +1,4 @@
-# DeployStega – Deterministic Dead-Drop Resolver
+markdown# DeployStega – Deterministic Dead-Drop Resolver
 
 DeployStega is a **research framework** for evaluating the detectability of covert routing over benign GitHub activity.  
 It is **not a messaging system** and **does not guarantee delivery**.  
@@ -42,6 +42,30 @@ Required fields:
 - `snapshot` (path to snapshot JSON)
 - `participants.sender.id`
 - `participants.receiver.id`
+- `epoch.origin_time_utc`
+- `epoch.duration_seconds`
+- `epoch.inspection_window`
+
+#### Sample `experiment_manifest.json`
+```json
+{
+  "experiment_id": "deploystega-test-001",
+  "snapshot": "experiments/snapshot.json",
+  "participants": {
+    "sender": {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "receiver": {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "epoch": {
+    "origin_time_utc": "2025-01-01T00:00:00Z",
+    "duration_seconds": 180,
+    "inspection_window": 20
+  }
+}
+```
 
 ### 3. Bootstrap Participant IDs (Once)
 
