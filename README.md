@@ -17,95 +17,150 @@ It provides *verifiable rendezvous* under strict, explicit assumptions.
 ## Set your token:
 ```bash
 export GITHUB_TOKEN=YOUR_TOKEN_HERE
+Step-by-Step Usage
+1. Clone the Repository
+bash
+Copy code
+git clone https://github.com/<your-org-or-username>/DeployStega.git
+cd DeployStega
+2. Prepare the Experiment Manifest
+Create or edit:
 
-## Step-by-Step Usage:
-1. **Clone the Repository**
-- git clone https://github.com/<your-org-or-username>/DeployStega.git
-- cd DeployStega
+bash
+Copy code
+experiments/experiment_manifest.json
+Required fields:
 
-2. **Prepare the Experiment Manifest**:
-- Create or edit: experiments/experiment_manifest.json
-  - Required fields:
-    - experiment_id
-    - snapshot (path to snapshot JSON)
-    - participants.sender.id
-    - participants.receiver.id
+experiment_id
 
-3. **Bootstrap Participant IDs (Optional)**
-- Generate fresh opaque session identifiers:
-  - python scripts/bootstrap_experiment.py
-  - This will populate:
-    - participants.sender.id
-    - participants.receiver.id
+snapshot (path to snapshot JSON)
 
-4. **Distribute**:
-- Sender ID → sender
-- Receiver ID → receiver
+participants.sender.id
 
-5. **Build the Repository Snapshot (Offline, Once)**
+participants.receiver.id
+
+3. Bootstrap Participant IDs (Optional)
+Generate fresh opaque session identifiers:
+
+bash
+Copy code
+python scripts/bootstrap_experiment.py
+This will populate:
+
+participants.sender.id
+
+participants.receiver.id
+
+4. Distribute
+Sender ID → sender
+
+Receiver ID → receiver
+
+5. Build the Repository Snapshot (Offline, Once)
 Enumerate real, addressable GitHub artifacts and freeze them into a snapshot:
-- python scripts/build_snapshot.py
-- This step:
-  - Uses the GitHub REST API
-  - Emits only schema-valid, concrete identifiers
-  - Rejects placeholders (e.g., "unknown")
-  - Writes the snapshot to the path specified in the manifest
+
+bash
+Copy code
+python scripts/build_snapshot.py
+This step:
+
+Uses the GitHub REST API
+
+Emits only schema-valid, concrete identifiers
+
+Rejects placeholders (e.g., "unknown")
+
+Writes the snapshot to the path specified in the manifest
+
 ⚠️ No enumeration or API calls occur after this step.
 
-6. **Run the Dead-Drop Resolver (Runtime)**
+6. Run the Dead-Drop Resolver (Runtime)
 Each participant independently runs:
-- python scripts/interactive_dead_drop.py
-- Inside the console:
-  - Confirm collaborator/write-access requirement
-  - Select role (sender or receiver)
-  - Enter your role-specific ID
-  - Enter an epoch index (integer)
+
+bash
+Copy code
+python scripts/interactive_dead_drop.py
+Inside the console:
+
+Confirm collaborator/write-access requirement
+
+Select role (sender or receiver)
+
+Enter your role-specific ID
+
+Enter an epoch index (integer)
 
 The resolver outputs:
-- Artifact class
-- Identifier tuple
-- Exactly one role-appropriate GitHub URL
-- Exactly one action sequence
 
-Sender Workflow:
-- Run the resolver as sender
-- Open the resolved URL
-- Perform the instructed mutation (edit, create, comment, etc.)
-- Exit — no signaling, acknowledgments, or retries
+Artifact class
+
+Identifier tuple
+
+Exactly one role-appropriate GitHub URL
+
+Exactly one action sequence
+
+Sender Workflow
+Run the resolver as sender
+
+Open the resolved URL
+
+Perform the instructed mutation (edit, create, comment, etc.)
+
+Exit — no signaling, acknowledgments, or retries
 
 Receiver Workflow
-- Run the resolver as receiver
-- Open the resolved URL
-- Attempt steganographic decoding
-- Apply decode-or-discard:
-- Decode fails → treat artifact as benign
-- Decode succeeds → accept message
-- Optionally inspect previous epochs within the experiment’s window
+Run the resolver as receiver
 
-**Key Properties**
-- Deterministic resolution
-- No runtime coordination
-- No live network queries
-- No invalid or placeholder URLs
-- Snapshot-valid, schema-conformant identifiers only
-- Verifiable rendezvous, not guaranteed delivery
+Open the resolved URL
 
-**Epoch Model**:
-- Epochs are logical indices, not synchronized events
-- Epoch definition is agreed out-of-band
-- Receiver may inspect epochs within a bounded window [T − W, T]
-- Clock drift is tolerated via window size
+Attempt steganographic decoding
 
-**Research Scope**:
+Apply decode-or-discard:
+
+Decode fails → treat artifact as benign
+
+Decode succeeds → accept message
+
+Optionally inspect previous epochs within the experiment’s window
+
+Key Properties
+Deterministic resolution
+
+No runtime coordination
+
+No live network queries
+
+No invalid or placeholder URLs
+
+Snapshot-valid, schema-conformant identifiers only
+
+Verifiable rendezvous, not guaranteed delivery
+
+Epoch Model
+Epochs are logical indices, not synchronized events
+
+Epoch definition is agreed out-of-band
+
+Receiver may inspect epochs within a bounded window [T − W, T]
+
+Clock drift is tolerated via window size
+
+Research Scope
 DeployStega is intended for:
-- Detectability analysis
-- Behavioral plausibility evaluation
-- Controlled covert-routing experiments
 
-**It is not intended for**:
-- Production deployment
-- Guaranteed message delivery
-- Real-time communication
+Detectability analysis
+
+Behavioral plausibility evaluation
+
+Controlled covert-routing experiments
+
+It is not intended for
+Production deployment
+
+Guaranteed message delivery
+
+Real-time communication
 
 License
 Research use only.
