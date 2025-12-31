@@ -65,7 +65,7 @@ Required fields:
   "epoch": {
     "origin_unix": 1735689600,
     "duration_seconds": 180,
-    "inspection_window": 20
+    "window_size": 20
   }
 }
 ```
