@@ -35,12 +35,16 @@ def write_snapshot(snapshot: RepositorySnapshot, path: str) -> None:
     """
     Serialize a RepositorySnapshot to a JSON file.
 
-    The output format is stable, deterministic, and content-blind.
+    The output format is:
+    - stable
+    - deterministic
+    - content-blind
     """
     data: Dict[str, Any] = {
         "artifacts": {}
     }
 
+    # Deterministic class ordering (Enum definition order)
     for artifact_class in snapshot.artifact_classes():
         entries: List[Dict[str, Any]] = []
 
@@ -65,17 +69,23 @@ def read_snapshot(path: str) -> RepositorySnapshot:
     Load a RepositorySnapshot from a JSON file.
 
     Assumes the file was produced by write_snapshot().
+
+    Structural integrity is enforced, but semantic validity
+    is deferred to snapshot.py.
     """
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
 
     raw_artifacts = raw.get("artifacts")
     if not isinstance(raw_artifacts, dict):
-        raise SnapshotError("Invalid snapshot format: missing 'artifacts'")
+        raise SnapshotError("Invalid snapshot format: missing or invalid 'artifacts'")
 
     artifacts: Dict[ArtifactClass, List[SnapshotArtifact]] = {}
 
-    for class_name, entries in raw_artifacts.items():
+    # Deterministic iteration over artifact classes
+    for class_name in sorted(raw_artifacts.keys()):
+        entries = raw_artifacts[class_name]
+
         try:
             artifact_class = ArtifactClass[class_name]
         except KeyError as e:
@@ -85,17 +95,32 @@ def read_snapshot(path: str) -> RepositorySnapshot:
 
         if not isinstance(entries, list):
             raise SnapshotError(
-                f"Invalid entries for artifact class {class_name}"
+                f"Invalid entries for artifact class {class_name}: expected list"
             )
 
         bucket: List[SnapshotArtifact] = []
 
         for entry in entries:
-            identifier = tuple(entry["identifier"])
+            if not isinstance(entry, dict):
+                raise SnapshotError(
+                    f"Invalid artifact entry for {class_name}: expected object"
+                )
+
+            if "identifier" not in entry:
+                raise SnapshotError(
+                    f"Missing identifier for artifact class {class_name}"
+                )
+
+            identifier = entry["identifier"]
+            if not isinstance(identifier, list):
+                raise SnapshotError(
+                    f"Identifier must be a list for artifact class {class_name}"
+                )
+
             bucket.append(
                 SnapshotArtifact(
                     artifact_class=artifact_class,
-                    identifier=identifier,
+                    identifier=tuple(identifier),
                 )
             )
 
