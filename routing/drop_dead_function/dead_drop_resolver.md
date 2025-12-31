@@ -364,7 +364,7 @@ Each inspected epoch yields exactly one snapshot-valid, observation-only URL. Ep
 **Receiver (independent):**
 - Resolves the dead drop for epoch *t*
 - Observes the resolved artifact
-- May observe that same artifact at any later time:
+- May observe that same artifact at any later time upto a specified point.
 
 There is **no runtime synchronization**, acknowledgment, or feedback.
 
