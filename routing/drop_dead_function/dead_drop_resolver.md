@@ -70,6 +70,9 @@ Epochs are **indices, not events**:
 - They do not imply that a sender acted.
 - They merely select a deterministic rendezvous candidate.
 
+Epoch counting begins the moment **`interactive_dead_drop.py` is first executed** by either party.
+Given that chosen start times are not exchanged out of band, the sender and receiver may run interactive_dead_drop.py at different times.
+
 No live messages between the sender and receiver are exchanged at runtime.  
 Clock drift is tolerated by the receiver’s inspection window.
 
