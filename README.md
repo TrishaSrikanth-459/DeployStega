@@ -47,7 +47,7 @@ Required fields:
 
 Generate fresh opaque session identifiers:
 ```bash
-python -m scripts/bootstrap_experiment.py
+python -m scripts.bootstrap_experiment
 ```
 
 This will populate:
@@ -64,7 +64,7 @@ This will populate:
 
 Enumerate real, addressable GitHub artifacts and freeze them into a snapshot:
 ```bash
-python -m scripts/build_snapshot.py
+python -m scripts.build_snapshot
 ```
 
 This step:
@@ -80,7 +80,7 @@ This step:
 
 Each participant independently runs:
 ```bash
-python -m scripts/interactive_dead_drop.py
+python -m scripts.interactive_dead_drop
 ```
 
 Inside the console:
