@@ -207,10 +207,7 @@ An issue is uniquely identified by the ordered triple
 - issue_number: The repository-scoped numeric identifier assigned to the issue at creation time.
 
 ### Addressability (Sender)
-1. Creates a new issue
-  - REST API: POST /repos/{owner}/{repo}/issues
-  - Web URL: https://github.com/{owner}/{repo}/issues/new
-2. Modifies mutable fields of an existing issue
+1. Modifies mutable fields of an existing issue
   - REST API: PATCH /repos/{owner}/{repo}/issues/{issue_number}
   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
       - Upon visiting this url, the sender must click the "edit" button on the top right.
@@ -252,21 +249,18 @@ A pull request is uniquely identified by the ordered tuple
 - branch_2: The source branch that contains the proposed changes.
 
 ### Addressability (Sender) 
-1. Creates a new pull request
-   - REST API: POST /repos/{owner}/{repo}/pulls
-   - Web URL: https://github.com/{owner}/{repo}/compare/{branch_1}...{branch_2}
-       - In the URL, the sender must replace all spaces with "-" symbols when referring to branch names. Upon visiting the URL, the sender must click "Create a pull request" and subsequently add a title and description before again clicking "Create a pull request."
-2. Modifies mutable pull request fields
+1. Modifies mutable pull request fields
    - REST API: PATCH /repos/{owner}/{repo}/pulls/{pull_number}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
        - Upon visiting the URL, the sender must click "Edit" to the right of the pull request's title to edit the title; the sender must or click "..." and then "Edit" near the top right of the pull request's body to edit the body.
-3. Merge the pull request into the target branch
+2. Merge the pull request into the target branch
    - REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
        - Upon visiting the URL, the sender must click "Merge pull request and subsequently type a commit message and extended description before finally clicking "Confirm merge."
 
 ### Addressability (Receiver) 
-1. REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}
+1. View an existing pull request. 
+   - REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
 
 ### Notes
@@ -305,8 +299,6 @@ Commit creation does not correspond to a distinct, user-visible URL at creation 
 1. Edit existing file
    - Web URL: https://github.com/{owner}/{repo}/edit/{branch}/{path}
        - Sender must click "Commit changes..." to save their edits.
-2. Create new file - Web URL: https://github.com/{owner}/{repo}/new/{branch}/{path}
-   - {path} should not include the new file name; the sender must enter the file's contents and subsequently click "Commit changes..." to save their edits. Submitting changes from these pages triggers an internal form submission that creates a new commit and assigns a commit_sha.
      
 ### Addressability (Receiver) 
 1. Access specified commits
@@ -432,15 +424,11 @@ A commit comment is uniquely identified by the ordered tuple
 (owner, repo, commit_sha).
 
 ### Addressability (Sender) 
-1. Create a new commit comment
-   - REST API: POST /repos/{owner}/{repo}/commits/{commit_sha}/comments
-   - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
-       - Sender must either 1) enter the comment's content in the textbox underneath "Comments," and finally, click "Comment" or 2) hover over "+" to the left of a specific commit line, enter the comment's contents in the newly appeared text box, and finally, click "Comment."
-2. Edit an existing commit comment
+1. Edit an existing commit comment
    - REST API: PATCH /repos/{owner}/{repo}/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
        - Sender must click "..." near the top right of the comment's text box, click "Edit," enter the desired edits, and finally, click "Update comment." They may do so for either a general comment or a line-specific comment.
-3. Delete a commit comment
+2. Delete a commit comment
    - REST API: DELETE /repos/{owner}/{repo}/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
        - Sender must click "..." near the top right of the comment's text box and click "Delete." They will need to click "Delete" an additional time if they are deleting a line-specific comment.
