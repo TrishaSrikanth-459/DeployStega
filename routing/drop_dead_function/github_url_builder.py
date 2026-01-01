@@ -31,7 +31,6 @@ class GitHubURLBuilder:
     HARD INVARIANTS:
     - artifact_class MUST equal ArtifactClass.name
     - identifier MUST already be schema-valid
-    - URLs MUST correspond to stable, user-visible GitHub pages
     - NO URL containing 'unknown' may be constructed
     - If a role has NO valid URL surface, return []
     """
@@ -86,7 +85,7 @@ class GitHubURLBuilder:
         }
 
     # =========================================================
-    # URL handlers (schema-faithful)
+    # URL handlers
     # =========================================================
 
     # -------------------------
@@ -111,7 +110,7 @@ class GitHubURLBuilder:
         ]
 
     # -------------------------
-    # Issue Comment (container-level)
+    # Issue Comment
     # -------------------------
 
     def _issue_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
@@ -126,14 +125,14 @@ class GitHubURLBuilder:
     # -------------------------
 
     def _pull_request_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        # identifier = (owner, repo, pull_number)
-        _, _, pull_number = identifier
+        # identifier = (owner, repo, pull_number, branch_1, branch_2)
+        _, _, pull_number, _, _ = identifier
         return [
             f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}"
         ]
 
     # -------------------------
-    # Pull Request Comment (container-level)
+    # Pull Request Comment
     # -------------------------
 
     def _pull_request_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
@@ -149,17 +148,13 @@ class GitHubURLBuilder:
     # -------------------------
 
     def _commit_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        # identifier = (owner, repo, commit_sha)
-        _, _, commit_sha = identifier
+        # identifier = (owner, repo, branch, path, commit_sha)
+        _, _, _, _, commit_sha = identifier
 
-        if not isinstance(commit_sha, str) or not commit_sha.strip():
+        if role == "sender":
             return []
 
-        # IMPORTANT NAMESPACE RULE:
-        # Commits are immutable, receiver-only artifacts.
-        # Sender MUST NOT be routed to commit-creation or edit surfaces,
-        # as that would create new commit_sha values not present in snapshot.
-        if role == "sender":
+        if not isinstance(commit_sha, str) or not commit_sha.strip():
             return []
 
         return [
@@ -167,7 +162,7 @@ class GitHubURLBuilder:
         ]
 
     # -------------------------
-    # Commit Comment (container-level)
+    # Commit Comment
     # -------------------------
 
     def _commit_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
