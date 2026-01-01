@@ -37,7 +37,7 @@ The following items **are shared out of band**:
 - the **steganographic decoding key** (to the receiver),
 - the **epoch definition**, including:
   - epoch duration (e.g., 3 minutes),
-  - epoch origin time `T₀`,
+  - a fixed epoch origin time `T₀`,
   - epoch inspection window size `W`.
 
 The following items are **not shared out of band**:
@@ -60,21 +60,25 @@ An **epoch** is a logical index defined as:
 
 t = floor((current_unix_time − T₀) / epoch_duration_seconds)
 
+markdown
+Copy code
+
 where:
 
-- **`T₀` (epoch origin)** is a fixed Unix timestamp agreed upon out of band,
+- **`T₀` (epoch origin)** is a **fixed Unix timestamp agreed upon out of band prior to the experiment**,
 - **`epoch_duration_seconds`** is fixed for the experiment,
 - **`current_unix_time`** is obtained locally at runtime.
 
 Epochs are **indices, not events**:
+
 - They do not imply that a sender acted.
 - They merely select a deterministic rendezvous candidate.
 
-Epoch counting begins the moment **`interactive_dead_drop.py` is first executed** by either party.
-Given that chosen start times are not exchanged out of band, the sender and receiver may run interactive_dead_drop.py at different times.
+Epoch counting begins at the fixed origin time **`T₀`**, not at script invocation or user interaction time.  
+Both sender and receiver compute epoch indices solely as a deterministic function of wall-clock time relative to `T₀`.
 
 No live messages between the sender and receiver are exchanged at runtime.  
-Clock drift is tolerated by the receiver’s inspection window.
+Clock drift and execution-time skew are tolerated by the receiver’s inspection window.
 
 ### Epoch Visibility at Runtime
 
@@ -82,10 +86,10 @@ The interactive console may display a **current logical epoch** value.
 This epoch is:
 
 - **derived automatically**, not user-specified,
-- **deterministically computed** from wall-clock time,
+- **deterministically computed** from wall-clock time relative to `T₀`,
 - **not negotiated or transmitted** between parties.
 
-If sender and receiver compute different epoch indices, **no coordination or agreement is expected**.
+If sender and receiver compute different epoch indices due to clock skew or execution timing, **no coordination or agreement is expected**.
 
 ---
 
@@ -133,7 +137,7 @@ The resolver never emits URLs outside this region.
 
 At runtime, each party independently provides:
 
-- epoch index `t` (computed locally),
+- epoch index `t` (computed locally from `T₀`),
 - `senderID`,
 - `receiverID`,
 - role (`sender` or `receiver`).
@@ -239,7 +243,7 @@ This is a **search problem with a definitive stopping condition**, not a messagi
 - Repository enumerated
 - Snapshot frozen
 - Feasibility region learned
-- Epoch parameters agreed
+- Epoch parameters (including fixed `T₀`) agreed
 
 ### Experiment Phase
 
@@ -272,7 +276,7 @@ Specifically:
 - Comment ordering, visibility, and existence are mutable and may change over time, making comment indices unsuitable as identifier-defining fields.
 - Introducing comment indices, counts, or sub-identifiers would require runtime API calls, further coordination, and snapshot mutation, violating the fixed-snapshot assumption and the resolver’s determinism guarantees.
 
-Accordingly, DeployStega models receiver-side work as a **bounded search problem**:
+Accordingly, DeployStega models receiver-side work as a **bounded search problem**.  
 This design reflects realistic covert signaling conditions, preserves snapshot immutability, avoids hidden coordination channels, and maintains behavioral plausibility. Receiver-side scanning cost is therefore an **explicit and measurable tradeoff for stealth**, not a routing defect.
 
 ---
@@ -282,6 +286,7 @@ This design reflects realistic covert signaling conditions, preserves snapshot i
 ### Assumptions
 
 - Fixed snapshot.
+- Fixed out-of-band epoch origin `T₀`.
 - Accurate feasibility region.
 - Sender and receiver are collaborators.
 - Private out-of-band setup.
