@@ -1,297 +1,129 @@
 """
-snapshot.py
+serializer.py
 
-Canonical repository snapshot representation.
+Serialization utilities for repository snapshots.
 
-This module:
-- Ingests raw enumeration output from enumerators.py
-- Validates identifier tuples against schema.py
-- Normalizes artifacts into a canonical, immutable snapshot object
-- Enforces snapshot-level invariants (uniqueness, schema conformance)
+Responsibilities:
+- Serialize a RepositorySnapshot to disk (JSON)
+- Deserialize a RepositorySnapshot from disk
+- Preserve identifier ordering and integrity
 
-This module performs:
+Non-responsibilities:
 - No enumeration
-- No network access
-- No serialization
-- No behavioral logic
+- No validation logic (handled by snapshot.py)
+- No URL construction
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Iterable, Any, Mapping
-from collections import defaultdict
+import json
+from typing import Dict, Any, List
 
-from .schema import (
-    ArtifactClass,
-    ArtifactIdentifierSchema,
-    IdentifierField,
-    get_schema,
-)
+# -------------------------------------------------
+# Internal package imports (Python 3–correct)
+# -------------------------------------------------
 
-# ============================================================
-# Exceptions
-# ============================================================
-
-class SnapshotError(Exception):
-    """Base class for snapshot-related errors."""
-
-    def __init__(self, message: str, *, context: Dict[str, Any] | None = None):
-        super().__init__(message)
-        self.context = context or {}
-
-    def __str__(self) -> str:
-        if not self.context:
-            return self.args[0]
-        return f"{self.args[0]} | context={self.context}"
-
-
-class SchemaViolation(SnapshotError):
-    """Raised when an identifier violates its schema."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        artifact_class: ArtifactClass | None = None,
-        field_name: str | None = None,
-        expected_type: str | None = None,
-        actual_value: Any | None = None,
-    ):
-        ctx = {
-            "artifact_class": artifact_class.name if artifact_class else None,
-            "field": field_name,
-            "expected_type": expected_type,
-            "actual_value": actual_value,
-        }
-        super().__init__(message, context={k: v for k, v in ctx.items() if v is not None})
-
-
-class DuplicateIdentifier(SnapshotError):
-    """Raised when duplicate identifiers are detected."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        artifact_class: ArtifactClass,
-        identifier: Tuple[Any, ...],
-    ):
-        super().__init__(
-            message,
-            context={
-                "artifact_class": artifact_class.name,
-                "identifier": identifier,
-            },
-        )
-
-
-class UnknownArtifactClass(SnapshotError):
-    """Raised when an unknown artifact class string is encountered."""
-
-    def __init__(self, raw: str):
-        super().__init__(
-            f"Unknown artifact class '{raw}'",
-            context={"raw_class": raw},
-        )
+from .snapshot import RepositorySnapshot, SnapshotArtifact, SnapshotError
+from .schema import ArtifactClass
 
 
 # ============================================================
-# Helpers
+# Serialization
 # ============================================================
 
-def _coerce_field(value: Any, field: IdentifierField) -> Any:
+def write_snapshot(snapshot: RepositorySnapshot, path: str) -> None:
     """
-    Enforce type correctness for a single identifier field.
+    Serialize a RepositorySnapshot to a JSON file.
+
+    The output format is:
+    - stable
+    - deterministic
+    - content-blind
     """
+    data: Dict[str, Any] = {
+        "artifacts": {}
+    }
 
-    if field.field_type == "string":
-        if not isinstance(value, str):
-            raise SchemaViolation(
-                "Field must be string",
-                field_name=field.name,
-                expected_type="string",
-                actual_value=value,
-            )
-        return value
+    # Deterministic class ordering (Enum definition order)
+    for artifact_class in snapshot.artifact_classes():
+        entries: List[Dict[str, Any]] = []
 
-    if field.field_type == "integer":
-        if not isinstance(value, int):
-            raise SchemaViolation(
-                "Field must be integer",
-                field_name=field.name,
-                expected_type="integer",
-                actual_value=value,
-            )
-        return value
+        for artifact in snapshot.artifacts_of(artifact_class):
+            entries.append({
+                "artifactClass": artifact_class.name,
+                "identifier": list(artifact.identifier),
+            })
 
-    if field.field_type == "hash":
-        if not isinstance(value, str):
-            raise SchemaViolation(
-                "Field must be hash string",
-                field_name=field.name,
-                expected_type="hash",
-                actual_value=value,
-            )
-        return value
+        data["artifacts"][artifact_class.name] = entries
 
-    raise SchemaViolation(
-        "Unknown identifier field type",
-        field_name=field.name,
-        expected_type=field.field_type,
-    )
-
-
-def _normalize_identifier(
-    raw: Mapping[str, Any],
-    schema: ArtifactIdentifierSchema,
-) -> Tuple[Any, ...]:
-    """
-    Normalize and validate an identifier tuple against its schema.
-
-    CRITICAL INVARIANTS:
-    - All required fields must exist
-    - No field may have value "unknown"
-    - Field types must match schema
-    """
-
-    values: List[Any] = []
-
-    for field in schema.fields:
-        if field.name not in raw:
-            raise SchemaViolation(
-                "Missing required identifier field",
-                artifact_class=schema.artifact_class,
-                field_name=field.name,
-            )
-
-        value = raw[field.name]
-
-        # 🚫 HARD FAIL: no placeholder identifiers allowed
-        if value == "unknown":
-            raise SchemaViolation(
-                "Invalid identifier value 'unknown'",
-                artifact_class=schema.artifact_class,
-                field_name=field.name,
-                actual_value=value,
-            )
-
-        values.append(_coerce_field(value, field))
-
-    return tuple(values)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 
 # ============================================================
-# Snapshot Objects
+# Deserialization
 # ============================================================
 
-@dataclass(frozen=True)
-class SnapshotArtifact:
-    artifact_class: ArtifactClass
-    identifier: Tuple[Any, ...]
-
-
-@dataclass(frozen=True)
-class RepositorySnapshot:
+def read_snapshot(path: str) -> RepositorySnapshot:
     """
-    Canonical, immutable snapshot of repository artifacts.
+    Load a RepositorySnapshot from a JSON file.
 
-    All identifiers are guaranteed:
-    - schema-valid
-    - non-placeholder
-    - unique
+    Assumes the file was produced by write_snapshot().
+
+    Structural integrity is enforced, but semantic validity
+    is deferred to snapshot.py.
     """
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
 
-    artifacts: Dict[ArtifactClass, Tuple[SnapshotArtifact, ...]]
+    raw_artifacts = raw.get("artifacts")
+    if not isinstance(raw_artifacts, dict):
+        raise SnapshotError("Invalid snapshot format: missing or invalid 'artifacts'")
 
-    # --------------------------------------------------------
-    # Construction
-    # --------------------------------------------------------
+    artifacts: Dict[ArtifactClass, List[SnapshotArtifact]] = {}
 
-    @classmethod
-    def from_enumeration(cls, raw_snapshot: Dict[str, Any]) -> "RepositorySnapshot":
-        raw_artifacts = raw_snapshot.get("artifacts")
-        if not isinstance(raw_artifacts, dict):
-            raise SnapshotError("Missing or invalid 'artifacts' section in snapshot")
-
-        buckets: Dict[ArtifactClass, List[SnapshotArtifact]] = defaultdict(list)
-        seen: set[Tuple[ArtifactClass, Tuple[Any, ...]]] = set()
-
-        for raw_class, entries in raw_artifacts.items():
-            artifact_class = cls._parse_artifact_class(raw_class)
-            schema = get_schema(artifact_class)
-
-            if not isinstance(entries, list):
-                raise SnapshotError(
-                    "Invalid artifact entry list",
-                    context={"artifact_class": artifact_class.name},
-                )
-
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    raise SnapshotError(
-                        "Artifact entry must be an object",
-                        context={"artifact_class": artifact_class.name},
-                    )
-
-                raw_id = entry.get("identifierTuple")
-                if raw_id is None:
-                    raise SchemaViolation(
-                        "Missing identifierTuple",
-                        artifact_class=artifact_class,
-                    )
-
-                identifier = _normalize_identifier(raw_id, schema)
-                key = (artifact_class, identifier)
-
-                if key in seen:
-                    raise DuplicateIdentifier(
-                        "Duplicate identifier detected",
-                        artifact_class=artifact_class,
-                        identifier=identifier,
-                    )
-
-                seen.add(key)
-                buckets[artifact_class].append(
-                    SnapshotArtifact(artifact_class, identifier)
-                )
-
-        # Freeze snapshot; drop empty classes deterministically
-        frozen: Dict[ArtifactClass, Tuple[SnapshotArtifact, ...]] = {
-            cls_: tuple(sorted(items, key=lambda a: a.identifier))
-            for cls_, items in buckets.items()
-            if items
-        }
-
-        if not frozen:
-            raise SnapshotError("Snapshot contains no valid artifacts")
-
-        return cls(artifacts=frozen)
-
-    # --------------------------------------------------------
-    # Accessors
-    # --------------------------------------------------------
-
-    def artifact_classes(self) -> Iterable[ArtifactClass]:
-        return self.artifacts.keys()
-
-    def artifacts_of(self, artifact_class: ArtifactClass) -> Tuple[SnapshotArtifact, ...]:
-        return self.artifacts.get(artifact_class, ())
-
-    def count(self, artifact_class: ArtifactClass) -> int:
-        return len(self.artifacts_of(artifact_class))
-
-    # --------------------------------------------------------
-    # Internal helpers
-    # --------------------------------------------------------
-
-    @staticmethod
-    def _parse_artifact_class(raw: str) -> ArtifactClass:
-        """
-        Parse enumerator artifact class strings into canonical enums.
-        """
+    # Deterministic iteration over artifact classes
+    for class_name in sorted(raw_artifacts.keys()):
+        entries = raw_artifacts[class_name]
 
         try:
-            return ArtifactClass[raw]
-        except KeyError:
-            raise UnknownArtifactClass(raw)
+            artifact_class = ArtifactClass[class_name]
+        except KeyError as e:
+            raise SnapshotError(
+                f"Unknown artifact class in snapshot: {class_name}"
+            ) from e
+
+        if not isinstance(entries, list):
+            raise SnapshotError(
+                f"Invalid entries for artifact class {class_name}: expected list"
+            )
+
+        bucket: List[SnapshotArtifact] = []
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise SnapshotError(
+                    f"Invalid artifact entry for {class_name}: expected object"
+                )
+
+            if "identifier" not in entry:
+                raise SnapshotError(
+                    f"Missing identifier for artifact class {class_name}"
+                )
+
+            identifier = entry["identifier"]
+            if not isinstance(identifier, list):
+                raise SnapshotError(
+                    f"Identifier must be a list for artifact class {class_name}"
+                )
+
+            bucket.append(
+                SnapshotArtifact(
+                    artifact_class=artifact_class,
+                    identifier=tuple(identifier),
+                )
+            )
+
+        artifacts[artifact_class] = bucket
+
+    return RepositorySnapshot(artifacts=artifacts)
