@@ -362,21 +362,19 @@ A pull request comment is uniquely identified by the ordered tuple
 (owner, repo, pull_number).
 
 ### Addressability (Sender) 
-1. Delete a pull request conversation comment
-   - REST API: DELETE 
-2. Create a new pull request review comment
+1. Create a new pull request review comment
    - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
        - Sender must hover over "+" to the left of the specific change they wish to comment on, enter the comment's contents in the newly appeared text box, and finally, click "Add review comment."
-3. Reply to an existing pull request review comment
+2. Reply to an existing pull request review comment
    - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
        - Sender must enter the reply's comments in the textbox underneath the comment they wish to reply to, and finally, click "Add review comment."
-4. Edit an existing pull request review comment
+3. Edit an existing pull request review comment
    - REST API: PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
        - Sender must click "..." near the top right of the text box of the comment, click "Edit," enter the desired edits in the newly appeared text box, and finally, click "Update comment."
-5. Delete a pull request review comment
+4. Delete a pull request review comment
    - REST API: DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
        - Sender must click "..." near the top right of the text box of the comment, click "Delete," and finally, click "Ok."
