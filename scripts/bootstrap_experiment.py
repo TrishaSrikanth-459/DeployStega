@@ -1,5 +1,5 @@
 """
-bootstrap_participants.py
+bootstrap_experiment.py
 
 Out-of-band experiment bootstrap utility.
 
