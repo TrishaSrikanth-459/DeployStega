@@ -14,7 +14,6 @@ from routing.dead_drop_function.repository_snapshot.schema import ArtifactClass
 
 GITHUB_API = "https://api.github.com"
 TOKEN_ENV = "GITHUB_TOKEN"
-
 OUTPUT_PATH = Path("experiments/snapshot.json")
 
 HEADERS = {
@@ -22,7 +21,6 @@ HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "DeployStega-Snapshot/1.0",
 }
-
 
 # ------------------------------------------------------------------
 # REST helpers
@@ -56,7 +54,6 @@ def paginated_get(url: str) -> List[Dict[str, Any]]:
 
     return out
 
-
 # ------------------------------------------------------------------
 # Snapshot builder
 # ------------------------------------------------------------------
@@ -65,28 +62,34 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
     """
     Build a schema-valid repository snapshot.
 
-    HARD INVARIANTS:
-    - All identifiers are real and addressable
-    - No placeholder values
-    - No inferred paths or branches
-    - Snapshot format matches RepositorySnapshot.from_enumeration
+    HARD REQUIREMENTS:
+    - Identifiers MUST match schema exactly
+    - Identifiers MUST correspond to user-visible GitHub URLs
+    - No creation-context fields (branches, paths, base/head)
+    - Snapshot is immutable and index-only
     """
 
     artifacts: Dict[str, List[Dict[str, Any]]] = {
         cls.name: [] for cls in ArtifactClass
     }
 
+    seen: Dict[str, set] = {cls.name: set() for cls in ArtifactClass}
+
+    def _add(cls: str, identifier: List[Any]) -> None:
+        key = tuple(identifier)
+        if key in seen[cls]:
+            return
+        seen[cls].add(key)
+        artifacts[cls].append({
+            "artifactClass": cls,
+            "identifier": identifier,
+        })
+
     # --------------------------------------------------------------
     # Repository
     # --------------------------------------------------------------
 
-    artifacts["Repository"].append({
-        "artifactClass": "Repository",
-        "identifierTuple": {
-            "owner": owner,
-            "repo": repo,
-        },
-    })
+    _add("Repository", [owner, repo])
 
     # --------------------------------------------------------------
     # Issues + IssueComments
@@ -101,26 +104,11 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
             continue
 
         issue_number = issue["number"]
-
-        artifacts["Issue"].append({
-            "artifactClass": "Issue",
-            "identifierTuple": {
-                "owner": owner,
-                "repo": repo,
-                "issue_number": issue_number,
-            },
-        })
+        _add("Issue", [owner, repo, issue_number])
 
         comments = paginated_get(issue["comments_url"])
         if comments:
-            artifacts["IssueComment"].append({
-                "artifactClass": "IssueComment",
-                "identifierTuple": {
-                    "owner": owner,
-                    "repo": repo,
-                    "issue_number": issue_number,
-                },
-            })
+            _add("IssueComment", [owner, repo, issue_number])
 
     # --------------------------------------------------------------
     # Pull Requests + PullRequestComments
@@ -132,92 +120,31 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
 
     for pr in prs:
         pull_number = pr["number"]
-        base = pr["base"]["ref"]
-        head = pr["head"]["ref"]
 
-        artifacts["PullRequest"].append({
-            "artifactClass": "PullRequest",
-            "identifierTuple": {
-                "owner": owner,
-                "repo": repo,
-                "pull_number": pull_number,
-                "branch_1": base,
-                "branch_2": head,
-            },
-        })
+        _add("PullRequest", [owner, repo, pull_number])
 
         comments = paginated_get(pr["_links"]["comments"]["href"])
         if comments:
-            artifacts["PullRequestComment"].append({
-                "artifactClass": "PullRequestComment",
-                "identifierTuple": {
-                    "owner": owner,
-                    "repo": repo,
-                    "pull_number": pull_number,
-                },
-            })
+            _add("PullRequestComment", [owner, repo, pull_number])
 
     # --------------------------------------------------------------
-    # Commits + CommitComments (STRICT & ADDRESSABLE)
+    # Commits + CommitComments (STRICT, SNAPSHOT-BOUND)
     # --------------------------------------------------------------
 
-    branches = paginated_get(
-        f"{GITHUB_API}/repos/{owner}/{repo}/branches"
+    commits = paginated_get(
+        f"{GITHUB_API}/repos/{owner}/{repo}/commits"
     )
 
-    for branch_obj in branches:
-        branch = branch_obj["name"]
-        commit_sha = branch_obj["commit"]["sha"]
+    for commit in commits:
+        commit_sha = commit["sha"]
 
-        commit_data = requests.get(
-            f"{GITHUB_API}/repos/{owner}/{repo}/git/commits/{commit_sha}",
-            headers=_auth_headers(),
-        )
-        commit_data.raise_for_status()
-        commit_json = commit_data.json()
-
-        tree_sha = commit_json["tree"]["sha"]
-
-        tree_resp = requests.get(
-            f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{tree_sha}",
-            headers=_auth_headers(),
-            params={"recursive": 1},
-        )
-        tree_resp.raise_for_status()
-        tree = tree_resp.json()
-
-        paths = [
-            t["path"]
-            for t in tree.get("tree", [])
-            if t.get("type") == "blob" and isinstance(t.get("path"), str)
-        ]
-
-        # Emit only fully valid commit identifiers
-        for path in paths[:5]:
-            artifacts["Commit"].append({
-                "artifactClass": "Commit",
-                "identifierTuple": {
-                    "owner": owner,
-                    "repo": repo,
-                    "branch": branch,
-                    "path": path,
-                    "commit_sha": commit_sha,
-                },
-            })
+        _add("Commit", [owner, repo, commit_sha])
 
         comments = paginated_get(
             f"{GITHUB_API}/repos/{owner}/{repo}/commits/{commit_sha}/comments"
         )
-
         if comments:
-            artifacts["CommitComment"].append({
-                "artifactClass": "CommitComment",
-                "identifierTuple": {
-                    "owner": owner,
-                    "repo": repo,
-                    "commit_sha": commit_sha,
-                },
-            })
+            _add("CommitComment", [owner, repo, commit_sha])
 
     # --------------------------------------------------------------
     # HARD FILTER: drop empty classes
@@ -229,7 +156,6 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, Any]:
         raise RuntimeError("Snapshot contains no valid artifacts")
 
     return {"artifacts": artifacts}
-
 
 # ------------------------------------------------------------------
 # CLI
@@ -246,12 +172,8 @@ def main() -> None:
 
     print(f"✅ Snapshot written to {OUTPUT_PATH}")
 
-
 if __name__ == "__main__":
     main()
-
-
-
 
 
 
