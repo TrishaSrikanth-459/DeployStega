@@ -7,9 +7,10 @@ Responsibilities:
 - Explicitly warn about collaborator requirement
 - Load experiment context and snapshot
 - Verify participant identity
-- Derive logical epoch deterministically
+- Derive logical epoch deterministically from FIXED T₀
 - Invoke deterministic resolver
 - Display resolved URL and role-specific action instructions
+- Emit a URL ONLY when explicitly requested by the user
 
 Non-responsibilities:
 - No routing logic
@@ -17,6 +18,11 @@ Non-responsibilities:
 - No snapshot generation
 - No permission probing
 - No delivery guarantees
+
+CRITICAL TIMING MODEL:
+- Epoch origin T₀ is fixed out of band and loaded from the experiment manifest
+- Running this script does NOT start or reset epoch counting
+- Each resolution computes the current epoch relative to T₀
 """
 
 from __future__ import annotations
@@ -44,6 +50,7 @@ class AllowAllFeasibility(FeasibilityRegion):
     Inspection-only feasibility region.
 
     This console does not model behavioral constraints.
+    All namespace-valid URLs are treated as feasible.
     """
     def is_url_allowed(self, *, epoch, artifact_class, role, url) -> bool:
         return True
@@ -84,8 +91,9 @@ def current_epoch(ctx) -> int:
     """
     Deterministically derive the current logical epoch.
 
-    Epochs are analytical indices derived from shared constants,
-    NOT synchronized clocks or coordination events.
+    IMPORTANT:
+    - Epoch indices are computed relative to FIXED T₀
+    - Script execution time does NOT affect epoch origin
     """
     now = int(time.time())
     return (now - ctx.epoch_origin_unix) // ctx.epoch_duration_seconds
@@ -110,15 +118,11 @@ The GitHub repository used for this experiment MUST satisfy the following:
 
 - The sender MUST be a collaborator on the repository
 - The provided GitHub token MUST have write access
-- The sender must be able to:
-  • Create issues
-  • Edit or create files (commit)
-  • Comment on issues, pull requests, and commits
+- All sender actions MUST be identifier-preserving
 
 Repositories where the sender is not a collaborator are NOT supported.
 
 This requirement is an experimental precondition.
-Routing behavior assumes identifier-preserving write access.
 """
     )
 
@@ -162,68 +166,70 @@ Routing behavior assumes identifier-preserving write access.
 
     resolver = build_resolver(ctx)
 
-    # --------------------------------------------------------
-    # Epoch handling
-    # --------------------------------------------------------
-
-    now_epoch = current_epoch(ctx)
-
-    print(f"Current logical epoch : {now_epoch}")
-    print(f"Receiver window size  : {ctx.epoch_window_size} epochs\n")
-
-    if role == "sender":
-        epochs_to_inspect = [now_epoch]
-    else:
-        # Receiver inspects a bounded window of past epochs
-        epochs_to_inspect = list(
-            range(
-                max(0, now_epoch - ctx.epoch_window_size),
-                now_epoch + 1,
-            )
-        )
+    print(
+        "Type ENTER to resolve the current epoch.\n"
+        "Press Ctrl+C to terminate the session.\n"
+    )
 
     # --------------------------------------------------------
-    # Resolve + display
+    # Interactive resolution loop (user-driven)
     # --------------------------------------------------------
 
-    for epoch in epochs_to_inspect:
-        result = resolver.resolve(
-            epoch=epoch,
-            sender_id=ctx.sender_id,
-            receiver_id=ctx.receiver_id,
-            role=role,
-        )
+    try:
+        while True:
+            input("Resolve next dead drop? (ENTER = yes) ")
 
-        artifact = result["artifactClass"]
-        identifier = result["identifier"]
-        url = result["url"]
+            epoch_now = current_epoch(ctx)
 
-        print("\n=== DEAD DROP RESOLUTION ===")
-        print("Epoch          :", epoch)
-        print("Artifact Class :", artifact)
-        print("Identifier     :", identifier)
-        print("URL            :", url)
+            if role == "sender":
+                epochs = [epoch_now]
+            else:
+                epochs = list(
+                    range(
+                        max(0, epoch_now - ctx.epoch_window_size),
+                        epoch_now + 1,
+                    )
+                )
 
-        print("\nACTION REQUIRED:")
-        actions = ACTION_SPECS[artifact][role]
+            for t in epochs:
+                result = resolver.resolve(
+                    epoch=t,
+                    sender_id=ctx.sender_id,
+                    receiver_id=ctx.receiver_id,
+                    role=role,
+                )
 
-        # Deterministically select exactly one action
-        action_idx = epoch % len(actions)
-        selected_action = actions[action_idx]
+                artifact = result["artifactClass"]
+                identifier = result["identifier"]
+                url = result["url"]
 
-        print(
-            f"(Selected action {action_idx + 1} of {len(actions)} "
-            f"for role '{role}')"
-        )
-        for i, step in enumerate(selected_action, start=1):
-            print(f"{i}. {step}")
+                print("\n=== DEAD DROP RESOLUTION ===")
+                print("Epoch          :", t)
+                print("Artifact Class :", artifact)
+                print("Identifier     :", identifier)
+                print("URL            :", url)
 
-        print("\n---")
+                print("\nACTION REQUIRED:")
+                actions = ACTION_SPECS[artifact][role]
+                action_idx = t % len(actions)
+                selected_action = actions[action_idx]
 
-        if role == "sender":
-            break  # sender resolves exactly one epoch
+                print(
+                    f"(Selected action {action_idx + 1} of {len(actions)} "
+                    f"for role '{role}')"
+                )
+                for i, step in enumerate(selected_action, start=1):
+                    print(f"{i}. {step}")
 
-    print("\n(Resolver logic complete. No further interaction assumed.)\n")
+                print("\n---")
+
+                # Sender resolves exactly one epoch per request
+                if role == "sender":
+                    break
+
+    except KeyboardInterrupt:
+        print("\n\n[Session terminated by user]")
+        print("No state persisted. No coordination occurred.\n")
 
 
 if __name__ == "__main__":
