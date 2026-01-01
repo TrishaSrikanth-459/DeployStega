@@ -31,6 +31,7 @@ class GitHubURLBuilder:
     HARD INVARIANTS:
     - artifact_class MUST equal ArtifactClass.name
     - identifier MUST already be schema-valid
+    - URLs MUST correspond to stable, user-visible GitHub pages
     - NO URL containing 'unknown' may be constructed
     - If a role has NO valid URL surface, return []
     """
@@ -57,10 +58,11 @@ class GitHubURLBuilder:
 
         urls = handler(identifier, role)
 
+        # Normalize: only keep non-empty strings
+        urls = [u for u in urls if isinstance(u, str) and u.strip()]
+
         # HARD SAFETY: never emit invalid or placeholder URLs
         for url in urls:
-            if not isinstance(url, str) or not url.strip():
-                raise RuntimeError(f"Invalid URL constructed: {url}")
             if "unknown" in url:
                 raise RuntimeError(
                     f"Invalid URL constructed (contains 'unknown'): {url}"
@@ -84,7 +86,7 @@ class GitHubURLBuilder:
         }
 
     # =========================================================
-    # URL handlers
+    # URL handlers (schema-faithful)
     # =========================================================
 
     # -------------------------
@@ -109,7 +111,7 @@ class GitHubURLBuilder:
         ]
 
     # -------------------------
-    # Issue Comment
+    # Issue Comment (container-level)
     # -------------------------
 
     def _issue_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
@@ -124,57 +126,57 @@ class GitHubURLBuilder:
     # -------------------------
 
     def _pull_request_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        # identifier = (owner, repo, pull_number, branch_1, branch_2)
-        _, _, pull_number, _, _ = identifier
+        # identifier = (owner, repo, pull_number)
+        _, _, pull_number = identifier
         return [
             f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}"
         ]
 
     # -------------------------
-    # Pull Request Comment
+    # Pull Request Comment (container-level)
     # -------------------------
 
     def _pull_request_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
         # identifier = (owner, repo, pull_number)
         _, _, pull_number = identifier
-
-        # Namespace-valid options; resolver will choose exactly ONE
         return [
             f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}",
             f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}/files",
         ]
 
     # -------------------------
-    # Commit
+    # Commit (receiver-only)
     # -------------------------
 
     def _commit_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        # identifier = (owner, repo, branch, path, commit_sha)
-        _, _, branch, path, commit_sha = identifier
+        # identifier = (owner, repo, commit_sha)
+        _, _, commit_sha = identifier
 
-        # Absolute requirement: branch and path must be concrete
-        if not branch or not path:
+        if not isinstance(commit_sha, str) or not commit_sha.strip():
             return []
 
+        # IMPORTANT NAMESPACE RULE:
+        # Commits are immutable, receiver-only artifacts.
+        # Sender MUST NOT be routed to commit-creation or edit surfaces,
+        # as that would create new commit_sha values not present in snapshot.
         if role == "sender":
-            # Sender-side commit creation surfaces
-            return [
-                f"https://github.com/{self.owner}/{self.repo}/edit/{branch}/{path}",
-                f"https://github.com/{self.owner}/{self.repo}/new/{branch}/{path}",
-            ]
+            return []
 
-        # Receiver observes immutable commit
         return [
             f"https://github.com/{self.owner}/{self.repo}/commit/{commit_sha}"
         ]
 
     # -------------------------
-    # Commit Comment
+    # Commit Comment (container-level)
     # -------------------------
 
     def _commit_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
         # identifier = (owner, repo, commit_sha)
         _, _, commit_sha = identifier
+
+        if not isinstance(commit_sha, str) or not commit_sha.strip():
+            return []
+
         return [
             f"https://github.com/{self.owner}/{self.repo}/commit/{commit_sha}"
         ]
