@@ -72,7 +72,7 @@ class ArtifactIdentifierSchema:
 
 
 # =========================
-# Canonical Schemas (namespace-accurate)
+# Canonical Schemas (URL-faithful)
 # =========================
 
 REPOSITORY_SCHEMA = ArtifactIdentifierSchema(
@@ -107,8 +107,6 @@ PULL_REQUEST_SCHEMA = ArtifactIdentifierSchema(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("pull_number", "integer"),
-        IdentifierField("branch_1", "string"),  # target branch (base)
-        IdentifierField("branch_2", "string"),  # source branch (head)
     ),
 )
 
@@ -126,8 +124,6 @@ COMMIT_SCHEMA = ArtifactIdentifierSchema(
     fields=(
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
-        IdentifierField("branch", "string"),
-        IdentifierField("path", "string"),
         IdentifierField("commit_sha", "hash"),
     ),
 )
