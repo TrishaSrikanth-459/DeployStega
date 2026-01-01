@@ -59,7 +59,7 @@ class SchemaViolation(SnapshotError):
         actual_value: Any | None = None,
     ):
         ctx = {
-            "artifact_class": artifact_class,
+            "artifact_class": artifact_class.name if artifact_class else None,
             "field": field_name,
             "expected_type": expected_type,
             "actual_value": actual_value,
@@ -80,7 +80,7 @@ class DuplicateIdentifier(SnapshotError):
         super().__init__(
             message,
             context={
-                "artifact_class": artifact_class,
+                "artifact_class": artifact_class.name,
                 "identifier": identifier,
             },
         )
@@ -101,6 +101,10 @@ class UnknownArtifactClass(SnapshotError):
 # ============================================================
 
 def _coerce_field(value: Any, field: IdentifierField) -> Any:
+    """
+    Enforce type correctness for a single identifier field.
+    """
+
     if field.field_type == "string":
         if not isinstance(value, str):
             raise SchemaViolation(
@@ -142,6 +146,15 @@ def _normalize_identifier(
     raw: Mapping[str, Any],
     schema: ArtifactIdentifierSchema,
 ) -> Tuple[Any, ...]:
+    """
+    Normalize and validate an identifier tuple against its schema.
+
+    CRITICAL INVARIANTS:
+    - All required fields must exist
+    - No field may have value "unknown"
+    - Field types must match schema
+    """
+
     values: List[Any] = []
 
     for field in schema.fields:
@@ -151,7 +164,19 @@ def _normalize_identifier(
                 artifact_class=schema.artifact_class,
                 field_name=field.name,
             )
-        values.append(_coerce_field(raw[field.name], field))
+
+        value = raw[field.name]
+
+        # 🚫 HARD FAIL: no placeholder identifiers allowed
+        if value == "unknown":
+            raise SchemaViolation(
+                "Invalid identifier value 'unknown'",
+                artifact_class=schema.artifact_class,
+                field_name=field.name,
+                actual_value=value,
+            )
+
+        values.append(_coerce_field(value, field))
 
     return tuple(values)
 
@@ -166,15 +191,18 @@ class SnapshotArtifact:
     identifier: Tuple[Any, ...]
 
 
-@dataclass
+@dataclass(frozen=True)
 class RepositorySnapshot:
     """
     Canonical, immutable snapshot of repository artifacts.
+
+    All identifiers are guaranteed:
+    - schema-valid
+    - non-placeholder
+    - unique
     """
 
-    artifacts: Dict[ArtifactClass, Tuple[SnapshotArtifact, ...]] = field(
-        default_factory=dict
-    )
+    artifacts: Dict[ArtifactClass, Tuple[SnapshotArtifact, ...]]
 
     # --------------------------------------------------------
     # Construction
@@ -183,8 +211,8 @@ class RepositorySnapshot:
     @classmethod
     def from_enumeration(cls, raw_snapshot: Dict[str, Any]) -> "RepositorySnapshot":
         raw_artifacts = raw_snapshot.get("artifacts")
-        if raw_artifacts is None:
-            raise SnapshotError("Missing 'artifacts' section in snapshot")
+        if not isinstance(raw_artifacts, dict):
+            raise SnapshotError("Missing or invalid 'artifacts' section in snapshot")
 
         buckets: Dict[ArtifactClass, List[SnapshotArtifact]] = defaultdict(list)
         seen: set[Tuple[ArtifactClass, Tuple[Any, ...]]] = set()
@@ -193,7 +221,19 @@ class RepositorySnapshot:
             artifact_class = cls._parse_artifact_class(raw_class)
             schema = get_schema(artifact_class)
 
+            if not isinstance(entries, list):
+                raise SnapshotError(
+                    "Invalid artifact entry list",
+                    context={"artifact_class": artifact_class.name},
+                )
+
             for entry in entries:
+                if not isinstance(entry, dict):
+                    raise SnapshotError(
+                        "Artifact entry must be an object",
+                        context={"artifact_class": artifact_class.name},
+                    )
+
                 raw_id = entry.get("identifierTuple")
                 if raw_id is None:
                     raise SchemaViolation(
@@ -216,10 +256,15 @@ class RepositorySnapshot:
                     SnapshotArtifact(artifact_class, identifier)
                 )
 
-        frozen = {
+        # Freeze snapshot; drop empty classes deterministically
+        frozen: Dict[ArtifactClass, Tuple[SnapshotArtifact, ...]] = {
             cls_: tuple(sorted(items, key=lambda a: a.identifier))
             for cls_, items in buckets.items()
+            if items
         }
+
+        if not frozen:
+            raise SnapshotError("Snapshot contains no valid artifacts")
 
         return cls(artifacts=frozen)
 
@@ -242,17 +287,11 @@ class RepositorySnapshot:
 
     @staticmethod
     def _parse_artifact_class(raw: str) -> ArtifactClass:
-        mapping = {
-            "Repositories": ArtifactClass.REPOSITORY,
-            "Issues": ArtifactClass.ISSUE,
-            "PullRequests": ArtifactClass.PULL_REQUEST,
-            "Commits": ArtifactClass.COMMIT,
-            "IssueComments": ArtifactClass.ISSUE_COMMENT,
-            "PRComments": ArtifactClass.PULL_REQUEST_COMMENT,
-            "CommitComments": ArtifactClass.COMMIT_COMMENT,
-        }
+        """
+        Parse enumerator artifact class strings into canonical enums.
+        """
 
         try:
-            return mapping[raw]
+            return ArtifactClass[raw]
         except KeyError:
             raise UnknownArtifactClass(raw)
