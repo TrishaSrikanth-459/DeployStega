@@ -15,6 +15,12 @@ Non-responsibilities:
 - No resolver logic
 - No epoch advancement
 - No network access
+
+CRITICAL TIMING MODEL:
+- The epoch origin time T₀ is a FIXED Unix timestamp.
+- T₀ is agreed upon OUT OF BAND prior to the experiment.
+- T₀ is NOT derived from script start time, process launch, or user interaction.
+- All epoch indices are computed relative to this fixed T₀.
 """
 
 from __future__ import annotations
@@ -43,6 +49,10 @@ class ExperimentContext:
 
     All fields are fixed at experiment start and MUST be shared
     out-of-band prior to any routing or steganographic activity.
+
+    In particular:
+    - epoch_origin_unix (T₀) is a fixed, shared reference time
+    - running any script does NOT start or reset epoch counting
     """
 
     # ---------------------------------------------------------
@@ -120,6 +130,12 @@ class ExperimentContext:
                 )
 
     def _validate_snapshot_path(self) -> None:
+        """
+        Validate snapshot path.
+
+        The snapshot MUST exist at experiment start and is assumed
+        to have been constructed PRIOR to epoch_origin_unix (T₀).
+        """
         path = Path(self.snapshot_path)
         if not path.exists():
             raise FileNotFoundError(
@@ -130,17 +146,33 @@ class ExperimentContext:
         """
         Validate epoch definition parameters.
 
-        Epochs are logical indices derived from a shared definition,
-        NOT synchronized clocks or live coordination.
+        Epochs are logical indices derived from a FIXED, SHARED definition.
+
+        IMPORTANT:
+        - epoch_origin_unix (T₀) is fixed out-of-band
+        - epoch counting does NOT begin at script execution
+        - runtime only computes indices relative to T₀
         """
 
-        if not isinstance(self.epoch_duration_seconds, int) or self.epoch_duration_seconds <= 0:
+        if (
+            not isinstance(self.epoch_duration_seconds, int)
+            or self.epoch_duration_seconds <= 0
+        ):
             raise ValueError("epoch.duration_seconds must be a positive integer")
 
-        if not isinstance(self.epoch_origin_unix, int) or self.epoch_origin_unix <= 0:
-            raise ValueError("epoch.origin_unix must be a positive UNIX timestamp")
+        if (
+            not isinstance(self.epoch_origin_unix, int)
+            or self.epoch_origin_unix <= 0
+        ):
+            raise ValueError(
+                "epoch.origin_unix must be a positive UNIX timestamp "
+                "fixed and shared out of band"
+            )
 
-        if not isinstance(self.epoch_window_size, int) or self.epoch_window_size <= 0:
+        if (
+            not isinstance(self.epoch_window_size, int)
+            or self.epoch_window_size <= 0
+        ):
             raise ValueError("epoch.window_size must be a positive integer")
 
     # =========================================================
@@ -178,5 +210,10 @@ def load_experiment_context(
     Load and validate the experiment context.
 
     This is the ONLY entrypoint interactive scripts should use.
+
+    NOTE:
+    This function does NOT start epoch counting.
+    Epoch indices are always computed relative to the fixed T₀
+    specified in the manifest.
     """
     return ExperimentContext(manifest_path)
