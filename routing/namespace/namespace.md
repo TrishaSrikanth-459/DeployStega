@@ -234,17 +234,13 @@ with associated discussion and review activity.
 - owner: string
 - repo: string
 - pull_number: integer
-- branch_1: string
-- branch_2: string
 
 ### Identifier Construction Rule
 A pull request is uniquely identified by the ordered tuple
-(owner, repo, pull_number, branch_1, branch_2), where:
+(owner, repo, pull_number), where:
 - owner: The GitHub user or organization that owns the repository.
 - repo: The repository name containing the pull request.
 - pull_number: The repository-scoped numeric identifier assigned when the pull request is created.
-- branch_1: The target branch into which changes are proposed to be merged.
-- branch_2: The source branch that contains the proposed changes.
 
 ### Addressability (Sender) 
 1. Modifies mutable pull request fields
@@ -279,8 +275,6 @@ identified by a cryptographic hash and addressable within a repository.
 ### Identifier Fields
 - owner: string
 - repo: string
-- branch: string
-- path: string
 - commit_sha: hexadecimal hash
 
 ### Identifier Construction Rule
@@ -288,8 +282,6 @@ A commit is uniquely identified by the ordered tuple
 (owner, repo, branch, path, commit_sha), where:
 - owner: The GitHub user or organization that owns the repository.
 - repo: The repository name in which the commit exists.
-- branch: The branch context under which the commit was created via the web interface.
-- path: The file path being edited or created when the commit is generated.
 - commit_sha: The cryptographic hash that uniquely identifies the commit.
 
 ### Addressability (Receiver) 
