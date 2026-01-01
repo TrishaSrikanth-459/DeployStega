@@ -55,10 +55,8 @@ the artifact’s identifier as defined in this routing namespace.
 
 **All sender actions explicitly enumerated in the Addressability (Sender)
 sections are assumed to be identifier-preserving by construction.**
-These actions may modify artifact content or existence (e.g., creating,
-editing, or deleting comments; editing issue or pull request text; creating
-commits via the web interface) but do not alter any identifier-defining
-fields specified in this routing namespace.
+These actions may modify artifact content (e.g., editing comments, issue, or pull requests) 
+but do not alter any identifier-defining fields specified in this routing namespace.
 
 ---
 
@@ -294,12 +292,6 @@ A commit is uniquely identified by the ordered tuple
 - path: The file path being edited or created when the commit is generated.
 - commit_sha: The cryptographic hash that uniquely identifies the commit.
 
-### Addressability (Sender) 
-Commit creation does not correspond to a distinct, user-visible URL at creation time. Instead, commits are side effect of sender interactions with file-editing interfaces. 
-1. Edit existing file
-   - Web URL: https://github.com/{owner}/{repo}/edit/{branch}/{path}
-       - Sender must click "Commit changes..." to save their edits.
-     
 ### Addressability (Receiver) 
 1. Access specified commits
    - REST API: GET /repos/{owner}/{repo}/commits/{commit_sha}
@@ -370,34 +362,27 @@ A pull request comment is uniquely identified by the ordered tuple
 (owner, repo, pull_number).
 
 ### Addressability (Sender) 
-1. Create a new pull request conversation comment
-   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
-       - Sender must scroll down to the text box under "Add a comment," enter the comment's contents, and finally, click "comment.
-2. Edit an existing pull request conversation commetn
-   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
-       - Sender must click "..." near the top right of the text box of the comment, click "Edit," enter the desired edits in the newly appeared text box, and finally, click "Update comment."
-3. Create a new pull request review comment
+1. Delete a pull request conversation comment
+   - REST API: DELETE 
+2. Create a new pull request review comment
    - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
        - Sender must hover over "+" to the left of the specific change they wish to comment on, enter the comment's contents in the newly appeared text box, and finally, click "Add review comment."
-4. Reply to an existing pull request review comment
+3. Reply to an existing pull request review comment
    - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
        - Sender must enter the reply's comments in the textbox underneath the comment they wish to reply to, and finally, click "Add review comment."
-5. Edit an existing pull request review comment
+4. Edit an existing pull request review comment
    - REST API: PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
        - Sender must click "..." near the top right of the text box of the comment, click "Edit," enter the desired edits in the newly appeared text box, and finally, click "Update comment."
-6. Delete a pull request review comment
+5. Delete a pull request review comment
    - REST API: DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
        - Sender must click "..." near the top right of the text box of the comment, click "Delete," and finally, click "Ok."
          
 ### Addressability (Receiver) 
-1. Access specified pull request conversation comments
-   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
-       - Reciever must scroll down to the desired comment on this page.
-2. Access specified pull request review comments
+1. Access specified pull request review comments
    - REST API: GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
        - Reciever must scroll down to the desired comment to the left of this page.
@@ -428,10 +413,6 @@ A commit comment is uniquely identified by the ordered tuple
    - REST API: PATCH /repos/{owner}/{repo}/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
        - Sender must click "..." near the top right of the comment's text box, click "Edit," enter the desired edits, and finally, click "Update comment." They may do so for either a general comment or a line-specific comment.
-2. Delete a commit comment
-   - REST API: DELETE /repos/{owner}/{repo}/comments/{comment_id}
-   - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
-       - Sender must click "..." near the top right of the comment's text box and click "Delete." They will need to click "Delete" an additional time if they are deleting a line-specific comment.
          
 ### Addressability (Receiver) 
 1. Access specified commit comments
@@ -440,7 +421,7 @@ A commit comment is uniquely identified by the ordered tuple
        - Receiver must scroll down to the desired comment on the page.
 
 ### Notes
-- Comment creation, editing, or deletion does not alter the identifier.
+- Comment editing does not alter the identifier.
 - Identifier-changing operations such as repository transfer are
   **assumed not to occur** within the experimental scope.
 
