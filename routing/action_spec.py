@@ -9,7 +9,8 @@ IMPORTANT INVARIANTS:
 - This module NEVER constructs or templates addresses
 - The resolver provides exactly one concrete URL
 - These steps describe what the user must do AFTER visiting that URL
-- Descriptions are NOT condensed from the routing namespace
+- ALL actions are identifier-preserving
+- NO action may create new identifiers not present in the snapshot
 """
 
 from typing import Dict, List
@@ -24,32 +25,26 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
     "Repository": {
         "sender": [
             [
-                "Retrieve the specified GitHub repository",
-                "Observe the repository contents, including source code, issues, pull requests, commits, and related collaborative artifacts"
+                "Access the repository landing page",
+                "Observe repository contents without creating or modifying artifacts"
             ]
         ],
         "receiver": [
             [
-                "Retrieve the specified GitHub repository",
-                "Observe the repository contents, including source code, issues, pull requests, commits, and related collaborative artifacts"
+                "Access the repository landing page",
+                "Observe repository contents without creating or modifying artifacts"
             ]
         ],
     },
 
     # ============================================================
-    # Issue
+    # Issue (identifier-preserving only)
     # ============================================================
 
     "Issue": {
         "sender": [
             [
-                "Create a new issue associated with the repository",
-                "Enter a title describing the tracked unit of work, discussion, or bug report",
-                "Enter a detailed issue description",
-                "Submit the issue"
-            ],
-            [
-                "Access an existing issue within the repository",
+                "Access the specified issue within the repository",
                 "Click the edit control for the issue",
                 "Modify mutable issue fields such as the title or body",
                 "Save the updated issue contents"
@@ -64,17 +59,11 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
     },
 
     # ============================================================
-    # Pull Request
+    # Pull Request (identifier-preserving only)
     # ============================================================
 
     "PullRequest": {
         "sender": [
-            [
-                "Initiate the creation of a pull request proposing changes from a source branch into a target branch",
-                "Provide a pull request title",
-                "Provide a pull request description",
-                "Submit the pull request"
-            ],
             [
                 "Access the existing pull request",
                 "Edit the pull request title",
@@ -82,42 +71,25 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
             ],
             [
                 "Access the existing pull request",
-                "Edit the pull request body description",
-                "Save the modified description"
-            ],
-            [
-                "Access the existing pull request",
-                "Merge the pull request into the target branch",
-                "Enter a commit message and extended description",
-                "Confirm the merge operation"
+                "If a pull request description exists, edit the description; otherwise edit the title",
+                "Save the modified content"
             ],
         ],
         "receiver": [
             [
                 "Access the specified pull request",
-                "Read the pull request description",
+                "Read the pull request description and title",
                 "Review the discussion and associated changes"
             ]
         ],
     },
 
     # ============================================================
-    # Commit
+    # Commit (receiver-only)
     # ============================================================
 
     "Commit": {
-        "sender": [
-            [
-                "Edit an existing file within the repository",
-                "Modify the file contents",
-                "Commit the changes, producing a new immutable snapshot of repository state"
-            ],
-            [
-                "Create a new file within the repository",
-                "Enter the contents for the new file",
-                "Commit the changes, producing a new immutable snapshot of repository state"
-            ],
-        ],
+        "sender": [],
         "receiver": [
             [
                 "Access the specified commit",
@@ -128,7 +100,7 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
     },
 
     # ============================================================
-    # Issue Comment
+    # Issue Comment (container-level)
     # ============================================================
 
     "IssueComment": {
@@ -152,25 +124,25 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
         "receiver": [
             [
                 "Access the specified issue",
-                "Scroll to the issue comments",
-                "Read the specified comment"
+                "Scroll through all visible issue comments",
+                "Attempt steganographic decoding on each comment"
             ]
         ],
     },
 
     # ============================================================
-    # Pull Request Comment
+    # Pull Request Comment (container-level)
     # ============================================================
 
     "PullRequestComment": {
         "sender": [
             [
-                "Access the pull request conversation",
+                "Access the pull request conversation view",
                 "Enter a new conversation comment",
                 "Submit the comment"
             ],
             [
-                "Access the pull request file changes",
+                "Access the pull request file changes view",
                 "Add a new inline review comment associated with a specific change",
                 "Submit the review comment"
             ],
@@ -187,18 +159,18 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
         ],
         "receiver": [
             [
-                "Access the pull request conversation",
-                "Scroll through the conversation comments"
+                "Access the pull request conversation view",
+                "Scroll through all visible conversation comments"
             ],
             [
-                "Access the pull request file changes",
-                "Scroll through the inline review comments"
+                "Access the pull request file changes view",
+                "Scroll through all visible inline review comments"
             ],
         ],
     },
 
     # ============================================================
-    # Commit Comment
+    # Commit Comment (container-level)
     # ============================================================
 
     "CommitComment": {
@@ -222,8 +194,8 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
         "receiver": [
             [
                 "Access the specified commit",
-                "Scroll to the commit comments",
-                "Read the specified comment"
+                "Scroll through all visible commit comments",
+                "Attempt steganographic decoding on each comment"
             ]
         ],
     },
