@@ -68,49 +68,55 @@ class DeadDropResolver:
         Returns exactly one URL.
 
         IMPORTANT:
-        If the initially selected (class, identifier) has no namespace-valid URL
-        or no feasible URL under constraints, we apply a deterministic rehash rule
-        and retry until we find a valid triple or exhaust max_rehash_attempts.
+        If the selected (class, identifier) yields no namespace-valid URL
+        for the given role, or no feasible URL under constraints,
+        a deterministic rehash rule is applied.
         """
         role_t = self._validate_role(role)
 
         if epoch < 0:
             raise ValueError("epoch must be non-negative")
 
-        # -----------------------------------------------------
-        # Deterministic retry loop (rehash collision/infeasibility handling)
-        # -----------------------------------------------------
         base_material = f"{epoch}|{sender_id}|{receiver_id}"
 
+        # -----------------------------------------------------
+        # Deterministic retry loop
+        # -----------------------------------------------------
         for attempt in range(self.max_rehash_attempts):
-            # Deterministically vary seed by attempt counter
-            d = self._hash_to_int(f"{base_material}|{attempt}")
+            seed = self._hash_to_int(f"{base_material}|{attempt}")
 
-            # 1) candidate class/id
-            artifact_class = self._select_artifact_class(d)
-            identifier = self._select_identifier(d, artifact_class)
+            # 1) Select artifact class (snapshot-only)
+            artifact_class = self._select_artifact_class(seed)
 
-            # 2) all namespace-valid URL candidates for this role
-            urls = self._candidate_urls(artifact_class, identifier, role_t)
+            # 2) Select identifier within class (snapshot-only)
+            identifier = self._select_identifier(seed, artifact_class)
+
+            # 3) Namespace-valid URL candidates for this role
+            urls = self._candidate_urls(
+                artifact_class=artifact_class,
+                identifier=identifier,
+                role=role_t,
+            )
+
+            # Namespace rule: some classes have zero sender surfaces
             if not urls:
-                # Namespace has no valid URLs for this role+identifier (e.g., missing fields)
                 continue
 
-            # 3) enforce feasibility constraints (may filter further)
+            # 4) Enforce feasibility constraints
             allowed = self.feasibility.filter_allowed_urls(
                 epoch=epoch,
                 artifact_class=artifact_class.name,
                 role=role_t,
                 urls=urls,
             )
+
             if not allowed:
-                # No feasible URLs at this epoch for this role
                 continue
 
-            # 4) choose exactly one URL deterministically from allowed set
+            # 5) Deterministically select exactly one URL
             url = self._select_one_url(
                 epoch=epoch,
-                base_seed=d,
+                base_seed=seed,
                 artifact_class=artifact_class,
                 identifier=identifier,
                 role=role_t,
@@ -144,53 +150,52 @@ class DeadDropResolver:
         return r  # type: ignore[return-value]
 
     # ---------------------------------------------------------
-    # Artifact class selection (ONLY from non-empty classes)
+    # Artifact class selection (snapshot-pure)
     # ---------------------------------------------------------
 
-    def _select_artifact_class(self, d: int) -> ArtifactClass:
-        available_classes = [
+    def _select_artifact_class(self, seed: int) -> ArtifactClass:
+        classes = [
             c for c in self.snapshot.artifact_classes()
             if self.snapshot.artifacts_of(c)
         ]
-        if not available_classes:
+
+        if not classes:
             raise RuntimeError("Snapshot contains no routable artifacts")
 
-        idx = d % len(available_classes)
-        return available_classes[idx]
+        return classes[seed % len(classes)]
 
     # ---------------------------------------------------------
-    # Identifier selection
+    # Identifier selection (snapshot-pure)
     # ---------------------------------------------------------
 
     def _select_identifier(
         self,
-        d: int,
+        seed: int,
         artifact_class: ArtifactClass,
     ) -> Tuple:
         artifacts = self.snapshot.artifacts_of(artifact_class)
         if not artifacts:
             raise RuntimeError(f"No artifacts for class {artifact_class.name}")
 
-        idx = d % len(artifacts)
-        return artifacts[idx].identifier
+        return artifacts[seed % len(artifacts)].identifier
 
     # ---------------------------------------------------------
-    # URL candidates (namespace options)
+    # URL candidates (namespace delegation)
     # ---------------------------------------------------------
 
     def _candidate_urls(
         self,
+        *,
         artifact_class: ArtifactClass,
         identifier: Tuple,
         role: Role,
     ) -> List[str]:
         """
-        Delegate to the URL builder to expose all namespace-valid URLs
-        for the given role.
+        Delegate namespace logic to GitHubURLBuilder.
 
         Contract:
-        - url_builder returns [] if no namespace-valid URL exists for this
-          (artifact_class, identifier, role).
+        - Returns [] if no namespace-valid URL exists for this role
+        - Resolver MUST treat [] as a hard skip and rehash
         """
         urls = self.url_builder.urls_for(
             artifact_class.name,
@@ -198,11 +203,10 @@ class DeadDropResolver:
             role,
         )
 
-        # Defensive: normalize & drop empties
-        return [u.strip() for u in urls if isinstance(u, str) and u.strip()]
+        return [u for u in urls if isinstance(u, str) and u.strip()]
 
     # ---------------------------------------------------------
-    # Deterministic one-URL selection
+    # Deterministic single-URL selection
     # ---------------------------------------------------------
 
     def _select_one_url(
@@ -215,14 +219,7 @@ class DeadDropResolver:
         role: Role,
         allowed_urls: List[str],
     ) -> str:
-        """
-        Choose exactly one URL from allowed_urls deterministically.
-
-        Mix in (epoch, class, role, identifier) so selection is stable but
-        sensitive to the exact resolved route.
-        """
         id_material = "|".join(str(x) for x in identifier)
         mix = f"{base_seed}|{epoch}|{artifact_class.name}|{role}|{id_material}"
         h = self._hash_to_int(mix)
-        idx = h % len(allowed_urls)
-        return allowed_urls[idx]
+        return allowed_urls[h % len(allowed_urls)]
