@@ -254,6 +254,29 @@ This is a **search problem with a definitive stopping condition**, not a messagi
 
 ---
 
+## Receiver-Side Ambiguity and Comment Scanning (Design Clarification)
+
+For artifact classes that expose **comment-bearing interaction surfaces** (e.g., IssueComment, PullRequestComment, CommitComment), the resolver intentionally routes to the **container-level URL** (issue, pull request, or commit page), rather than to a specific sub-object such as an individual comment.
+
+As a consequence:
+
+- The sender mutates **one specific comment** within the resolved container.
+- The receiver, upon visiting the resolved observation-only URL, must **scan all visible comments** and apply steganographic decoding to each candidate.
+- If decoding fails, the artifact is treated as benign under the decode-or-discard rule.
+
+This ambiguity is **intentional**, not a limitation of the resolver.
+
+Specifically:
+
+- GitHub does not expose stable, user-visible identifiers or URLs for individual comments that are suitable for deterministic routing.
+- Comment ordering, visibility, and existence are mutable and may change over time, making comment indices unsuitable as identifier-defining fields.
+- Introducing comment indices, counts, or sub-identifiers would require runtime API calls, further coordination, and snapshot mutation, violating the fixed-snapshot assumption and the resolver’s determinism guarantees.
+
+Accordingly, DeployStega models receiver-side work as a **bounded search problem**:
+This design reflects realistic covert signaling conditions, preserves snapshot immutability, avoids hidden coordination channels, and maintains behavioral plausibility. Receiver-side scanning cost is therefore an **explicit and measurable tradeoff for stealth**, not a routing defect.
+
+---
+
 ## Assumptions and Limitations
 
 ### Assumptions
