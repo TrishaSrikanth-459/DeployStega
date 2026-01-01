@@ -37,7 +37,7 @@ The following items **are shared out of band**:
 - the **steganographic decoding key** (to the receiver),
 - the **epoch definition**, including:
   - epoch duration (e.g., 3 minutes),
-  - a fixed epoch origin time `T₀`,
+  - a **fixed epoch origin time `T₀`**,
   - epoch inspection window size `W`.
 
 The following items are **not shared out of band**:
@@ -60,9 +60,6 @@ An **epoch** is a logical index defined as:
 
 t = floor((current_unix_time − T₀) / epoch_duration_seconds)
 
-markdown
-Copy code
-
 where:
 
 - **`T₀` (epoch origin)** is a **fixed Unix timestamp agreed upon out of band prior to the experiment**,
@@ -74,11 +71,15 @@ Epochs are **indices, not events**:
 - They do not imply that a sender acted.
 - They merely select a deterministic rendezvous candidate.
 
-Epoch counting begins at the fixed origin time **`T₀`**, not at script invocation or user interaction time.  
-Both sender and receiver compute epoch indices solely as a deterministic function of wall-clock time relative to `T₀`.
+**Epoch counting begins at the fixed origin time `T₀`, not at script invocation, process start, or user interaction time.**  
+Running `interactive_dead_drop.py` does **not** start, reset, or advance the epoch counter.
+
+Both sender and receiver compute epoch indices solely as a deterministic function of wall-clock time relative to the shared `T₀`.
 
 No live messages between the sender and receiver are exchanged at runtime.  
 Clock drift and execution-time skew are tolerated by the receiver’s inspection window.
+
+---
 
 ### Epoch Visibility at Runtime
 
@@ -87,9 +88,12 @@ This epoch is:
 
 - **derived automatically**, not user-specified,
 - **deterministically computed** from wall-clock time relative to `T₀`,
-- **not negotiated or transmitted** between parties.
+- **not negotiated, transmitted, or synchronized** between parties.
 
 If sender and receiver compute different epoch indices due to clock skew or execution timing, **no coordination or agreement is expected**.
+
+Repeated resolutions **within the same epoch** will deterministically yield the **same artifact and URL**.  
+A different URL is produced **only when wall-clock time advances into a new epoch**.
 
 ---
 
@@ -137,7 +141,7 @@ The resolver never emits URLs outside this region.
 
 At runtime, each party independently provides:
 
-- epoch index `t` (computed locally from `T₀`),
+- epoch index `t` (computed locally from the fixed `T₀`),
 - `senderID`,
 - `receiverID`,
 - role (`sender` or `receiver`).
@@ -178,7 +182,7 @@ The PRNG **never invents identifiers** — it indexes only from snapshot-defined
 - They resolve it to **different URLs**:
   - sender → mutation-capable surface,
   - receiver → observation-only surface.
-- Exactly one URL is returned per epoch to the user.
+- Exactly one URL is returned per epoch.
 
 ---
 
@@ -243,7 +247,7 @@ This is a **search problem with a definitive stopping condition**, not a messagi
 - Repository enumerated
 - Snapshot frozen
 - Feasibility region learned
-- Epoch parameters (including fixed `T₀`) agreed
+- Epoch parameters **including fixed `T₀`** agreed out of band
 
 ### Experiment Phase
 
@@ -272,12 +276,12 @@ This ambiguity is **intentional**, not a limitation of the resolver.
 
 Specifically:
 
-- GitHub does not expose stable, user-visible identifiers or URLs for individual comments that are suitable for deterministic routing.
-- Comment ordering, visibility, and existence are mutable and may change over time, making comment indices unsuitable as identifier-defining fields.
-- Introducing comment indices, counts, or sub-identifiers would require runtime API calls, further coordination, and snapshot mutation, violating the fixed-snapshot assumption and the resolver’s determinism guarantees.
+- GitHub does not expose stable, user-visible identifiers or URLs for individual comments suitable for deterministic routing.
+- Comment ordering, visibility, and existence are mutable and may change over time.
+- Introducing comment indices or sub-identifiers would violate snapshot immutability and determinism.
 
 Accordingly, DeployStega models receiver-side work as a **bounded search problem**.  
-This design reflects realistic covert signaling conditions, preserves snapshot immutability, avoids hidden coordination channels, and maintains behavioral plausibility. Receiver-side scanning cost is therefore an **explicit and measurable tradeoff for stealth**, not a routing defect.
+Receiver-side scanning cost is an **explicit and measurable tradeoff for stealth**, not a routing defect.
 
 ---
 
