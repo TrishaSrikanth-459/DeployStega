@@ -34,6 +34,7 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
             [
                 "Access the repository landing page",
                 "Observe high-level repository structure without creating or modifying artifacts"
+                "Do not attempt steganographic decoding yet"
             ]
         ],
     },
@@ -54,7 +55,7 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
         "receiver": [
             [
                 "Access the specified issue page",
-                "Read the issue title and body only",
+                "Attempt steganographic decoding on the issue title and body (if it exists) only",
                 "Do not inspect or process issue comments"
             ]
         ],
@@ -80,7 +81,7 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
         "receiver": [
             [
                 "Access the specified pull request page",
-                "Read the pull request title and description only",
+                "Attempt steganographic decoding on the pull request title and description (if it exists) only",
                 "Do not inspect conversation comments or review comments"
             ]
         ],
@@ -95,8 +96,8 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
         "receiver": [
             [
                 "Access the specified commit page",
-                "Review the commit diff and metadata representing the immutable snapshot",
-                "Do not inspect or process commit comments"
+                "Review the commit diff and metadata",
+                "Do not attempt steganographic decoding yet"
             ]
         ],
     },
