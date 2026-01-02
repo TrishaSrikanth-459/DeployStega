@@ -11,6 +11,7 @@ IMPORTANT INVARIANTS:
 - These steps describe what the user must do AFTER visiting that URL
 - ALL actions are identifier-preserving
 - NO action may create new identifiers not present in the snapshot
+- Artifact classes MUST NOT implicitly access sibling artifact classes
 """
 
 from typing import Dict, List
@@ -26,130 +27,131 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
         "sender": [
             [
                 "Access the repository landing page",
-                "Observe repository contents without creating or modifying artifacts"
+                "Observe high-level repository structure without creating or modifying artifacts"
             ]
         ],
         "receiver": [
             [
                 "Access the repository landing page",
-                "Observe repository contents without creating or modifying artifacts"
+                "Observe high-level repository structure without creating or modifying artifacts"
             ]
         ],
     },
 
     # ============================================================
-    # Issue (identifier-preserving only)
+    # Issue (container only — NO comments)
     # ============================================================
 
     "Issue": {
         "sender": [
             [
-                "Access the specified issue within the repository",
-                "Click the edit control for the issue",
+                "Access the specified issue page",
+                "Click the issue edit control",
                 "Modify mutable issue fields such as the title or body",
                 "Save the updated issue contents"
             ],
         ],
         "receiver": [
             [
-                "Access the specified issue within the repository",
-                "Read the issue title and description"
+                "Access the specified issue page",
+                "Read the issue title and body only",
+                "Do not inspect or process issue comments"
             ]
         ],
     },
 
     # ============================================================
-    # Pull Request (identifier-preserving only)
+    # Pull Request (container only — NO comments)
     # ============================================================
 
     "PullRequest": {
         "sender": [
             [
-                "Access the existing pull request",
+                "Access the specified pull request page",
                 "Edit the pull request title",
                 "Save the modified title"
             ],
             [
-                "Access the existing pull request",
+                "Access the specified pull request page",
                 "If a pull request description exists, edit the description; otherwise edit the title",
                 "Save the modified content"
             ],
         ],
         "receiver": [
             [
-                "Access the specified pull request",
-                "Read the pull request description and title",
-                "Review the discussion and associated changes"
+                "Access the specified pull request page",
+                "Read the pull request title and description only",
+                "Do not inspect conversation comments or review comments"
             ]
         ],
     },
 
     # ============================================================
-    # Commit (receiver-only)
+    # Commit (container only — NO comments)
     # ============================================================
 
     "Commit": {
         "sender": [],
         "receiver": [
             [
-                "Access the specified commit",
-                "Review the commit diff representing the immutable snapshot of repository state",
-                "Read any associated commit comments"
+                "Access the specified commit page",
+                "Review the commit diff and metadata representing the immutable snapshot",
+                "Do not inspect or process commit comments"
             ]
         ],
     },
 
     # ============================================================
-    # Issue Comment (container-level)
+    # Issue Comment (comment-only surface)
     # ============================================================
 
     "IssueComment": {
         "sender": [
             [
-                "Access the specified issue",
-                "Enter a new comment associated with the issue",
+                "Access the issue comment entry interface",
+                "Create a new issue comment without modifying issue metadata",
                 "Submit the comment"
             ],
             [
-                "Access the specified issue",
-                "Edit an existing issue comment",
-                "Update the comment contents"
+                "Access an existing issue comment",
+                "Edit the comment contents only",
+                "Save the updated comment"
             ],
             [
-                "Access the specified issue",
-                "Delete an existing issue comment",
+                "Access an existing issue comment",
+                "Delete the comment",
                 "Confirm the deletion"
             ],
         ],
         "receiver": [
             [
-                "Access the specified issue",
-                "Scroll through all visible issue comments",
+                "Access the issue comment region",
+                "Iterate over visible issue comments only",
                 "Attempt steganographic decoding on each comment"
             ]
         ],
     },
 
     # ============================================================
-    # Pull Request Comment (container-level)
+    # Pull Request Comment (comment-only surface)
     # ============================================================
 
     "PullRequestComment": {
         "sender": [
             [
-                "Access the pull request conversation view",
-                "Enter a new conversation comment",
+                "Access the pull request conversation comment interface",
+                "Create a new conversation comment",
                 "Submit the comment"
             ],
             [
-                "Access the pull request file changes view",
-                "Add a new inline review comment associated with a specific change",
+                "Access the pull request inline review interface",
+                "Add a new inline review comment",
                 "Submit the review comment"
             ],
             [
                 "Access an existing pull request comment",
-                "Edit the comment contents",
-                "Update the comment"
+                "Edit the comment contents only",
+                "Save the updated comment"
             ],
             [
                 "Access an existing pull request comment",
@@ -159,42 +161,39 @@ ACTION_SPECS: Dict[str, Dict[str, List[List[str]]]] = {
         ],
         "receiver": [
             [
-                "Access the pull request conversation view",
-                "Scroll through all visible conversation comments"
-            ],
-            [
-                "Access the pull request file changes view",
-                "Scroll through all visible inline review comments"
-            ],
+                "Access the pull request comment region",
+                "Iterate over visible pull request comments only",
+                "Attempt steganographic decoding on each comment"
+            ]
         ],
     },
 
     # ============================================================
-    # Commit Comment (container-level)
+    # Commit Comment (comment-only surface)
     # ============================================================
 
     "CommitComment": {
         "sender": [
             [
-                "Access the specified commit",
-                "Enter a new comment associated with the commit",
+                "Access the commit comment entry interface",
+                "Create a new commit comment without modifying commit metadata",
                 "Submit the comment"
             ],
             [
-                "Access the specified commit",
-                "Edit an existing commit comment",
-                "Update the comment contents"
+                "Access an existing commit comment",
+                "Edit the comment contents only",
+                "Save the updated comment"
             ],
             [
-                "Access the specified commit",
-                "Delete an existing commit comment",
+                "Access an existing commit comment",
+                "Delete the comment",
                 "Confirm the deletion"
             ],
         ],
         "receiver": [
             [
-                "Access the specified commit",
-                "Scroll through all visible commit comments",
+                "Access the commit comment region",
+                "Iterate over visible commit comments only",
                 "Attempt steganographic decoding on each comment"
             ]
         ],
