@@ -57,10 +57,9 @@ class GitHubURLBuilder:
 
         urls = handler(identifier, role)
 
-        # Normalize: only keep non-empty strings
+        # Normalize
         urls = [u for u in urls if isinstance(u, str) and u.strip()]
 
-        # HARD SAFETY: never emit invalid or placeholder URLs
         for url in urls:
             if "unknown" in url:
                 raise RuntimeError(
@@ -85,7 +84,7 @@ class GitHubURLBuilder:
         }
 
     # =========================================================
-    # URL handlers
+    # URL handlers (SCHEMA-ALIGNED)
     # =========================================================
 
     # -------------------------
@@ -125,8 +124,8 @@ class GitHubURLBuilder:
     # -------------------------
 
     def _pull_request_urls(self, identifier: Tuple, role: Role) -> List[str]:
-        # identifier = (owner, repo, pull_number, branch_1, branch_2)
-        _, _, pull_number, _, _ = identifier
+        # identifier = (owner, repo, pull_number)
+        _, _, pull_number = identifier
         return [
             f"https://github.com/{self.owner}/{self.repo}/pull/{pull_number}"
         ]
@@ -152,9 +151,7 @@ class GitHubURLBuilder:
         _, _, _, _, commit_sha = identifier
 
         if role == "sender":
-            return []
-
-        if not isinstance(commit_sha, str) or not commit_sha.strip():
+            # Sender must NOT create commits (would create new commit_sha)
             return []
 
         return [
@@ -168,10 +165,6 @@ class GitHubURLBuilder:
     def _commit_comment_urls(self, identifier: Tuple, role: Role) -> List[str]:
         # identifier = (owner, repo, commit_sha)
         _, _, commit_sha = identifier
-
-        if not isinstance(commit_sha, str) or not commit_sha.strip():
-            return []
-
         return [
             f"https://github.com/{self.owner}/{self.repo}/commit/{commit_sha}"
         ]
