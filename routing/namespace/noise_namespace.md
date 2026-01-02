@@ -83,49 +83,60 @@ GitHub delivers notifications as threads, where each thread represents the curre
 - Fine-grained personal access tokens, GitHub App user tokens, and GitHub App installation tokens are **not supported**.
 
 ### Addressability (Sender and Receiver)
+### Notifications Inbox (User-Level)
 
-#### Global Notifications (User-Level)
+#### List all notification threads for the authenticated user (most recent first)
+- **GUI URL:** https://github.com/notifications
 
-1. List all notification threads for the authenticated user, sorted by most recently updated.
-   - REST API: `GET /notifications`
-   - URL: `https://api.github.com/notifications`
-2. Marks all notifications as read up to an optional `last_read_at` timestamp.
-   - REST API: `PUT /notifications`
-   - URL: `https://api.github.com/notifications`
+#### Mark notifications as read (bulk)
+- **GUI URL:** https://github.com/notifications
+- **GUI action:** Use **“Mark all as read”** (or select notifications and mark as read) in the inbox UI.
+- **Note:** This is not a separate navigable URL; it is an action performed on the inbox page.
 
-#### Notification Threads (Thread-Level)
+### Notification Threads (Thread-Level)
 
-3. Retrieves metadata for a specific notification thread, including its repository, subject, reason, and timestamps.
-   - REST API: `GET /notifications/threads/{thread_id}`
-   - URL: `https://api.github.com/notifications/threads/{thread_id}`
-4. Mark a notification thread as read
-   - REST API: `PATCH /notifications/threads/{thread_id}`
-   - URL: `https://api.github.com/notifications/threads/{thread_id}`
-5. Mark a notification thread as done
-   - REST API: `DELETE /notifications/threads/{thread_id}`
-   - URL: `https://api.github.com/notifications/threads/{thread_id}`
+#### Open a specific notification thread (view metadata and jump to subject)
+- **GUI URL:** https://github.com/notifications
+- **GUI action:** Click the notification row → GitHub routes you to the subject page.
 
-#### Thread Subscriptions
+#### Mark a notification thread as read
+- **GUI URL:** https://github.com/notifications
+- **GUI action:** Open the thread (or use row actions); the notification becomes read.
 
-6. Get a thread subscription; returns whether the user is subscribed to or ignoring the thread, along with subscription metadata.
-   - REST API: `GET /notifications/threads/{thread_id}/subscription`
-   - URL: `https://api.github.com/notifications/threads/{thread_id}/subscription`
-7. Set a thread subscription; allows the user to subscribe to or ignore notifications for the thread
-   - REST API: `PUT /notifications/threads/{thread_id}/subscription`
-   - URL: `https://api.github.com/notifications/threads/{thread_id}/subscription`
-8. Delete a thread subscription; mutes future notifications for the thread until the user comments or is @mentioned.
-   - REST API: `DELETE /notifications/threads/{thread_id}/subscription`
-   - URL: `https://api.github.com/notifications/threads/{thread_id}/subscription`.
+#### Mark a notification thread as done
+- **GUI URL:** https://github.com/notifications
+- **GUI action:** Use **“Done”** on that notification in the inbox UI.
+- **Note:** This is not a stable “visit this URL” operation; it is a UI action.
 
-#### Repository-Scoped Notifications
+### Thread Subscriptions (GUI)
 
-9.  Lists all notification threads for the authenticated user within the specified repository
-   - REST API: `GET /repos/{owner}/{repo}/notifications`
-   - URL: `https://api.github.com/repos/{owner}/{repo}/notifications`
+#### View subscription status for particular subject
+- **GUI URL (depends on subject type):**
+  - **Issue URL:** https://github.com/{owner}/{repo}/issues/{issue_number}
+  - **Pull Request URL:** https://github.com/{owner}/{repo}/pull/{pull_number}
+- **GUI element:** View **“Subscribe / Unsubscribe”** in the right-side panel.
 
-10. Marks all notifications in the specified repository as read.
-    - REST API: `PUT /repos/{owner}/{repo}/notifications`
-    - URL: `https://api.github.com/repos/{owner}/{repo}/notifications`
+#### Set subscription state (subscribe / unsubscribe) for particular subject
+- **GUI URL (depends on subject type):**
+  - **Issue URL:** https://github.com/{owner}/{repo}/issues/{issue_number}
+  - **Pull Request URL:** https://github.com/{owner}/{repo}/pull/{pull_number}
+- **GUI action:** Toggle **Subscribe / Unsubscribe**.
+
+#### Mute future notifications for the thread (“ignore” behavior)
+- **GUI URL (depends on subject type):**
+  - **Issue URL:** https://github.com/{owner}/{repo}/issues/{issue_number}
+  - **Pull Request URL:** https://github.com/{owner}/{repo}/pull/{pull_number}
+- **GUI action:** Set notifications to **ignore / unsubscribe** (where available).
+
+### Repository-Scoped Notifications (GUI)
+
+#### List notification threads within a specific repository
+- **GUI URL:** https://github.com/notifications?query=repo:{owner}/{repo}
+
+#### Mark repository notifications as read
+- **GUI URL:** https://github.com/notifications?query=repo:{owner}/{repo}
+- **GUI action:** Use bulk **Mark as read** on the filtered results.
+- **Note:** There is no stable, separate URL; this is an action performed on the page.
 
 ### Notification Reasons
 Each notification thread includes a `reason` field indicating why the notification was generated.  
@@ -142,6 +153,26 @@ Reasons include (but are not limited to):
 - `security_alert`
 
 The reason is **thread-specific** and may change over time.
+
+## Notification Visibility and User Settings (Environmental Dependency)
+
+Notification-related interactions are subject to **user-specific GitHub notification settings**, including delivery channels, subscription scope, and ignored repositories. As a result, notification visibility is **not guaranteed**.
+
+DeployStega therefore makes **no assumptions** that notifications:
+
+- exist,
+- are unread,
+- are delivered to the GitHub web inbox,
+- or are visible to the user at any given time.
+
+### Protocol Implications
+
+- Notification interactions are **never required** for correctness.
+- Notification interactions are **never used** for encoding or decoding.
+- Users may, at any point, skip visiting notification URLs selected by the resolver.
+- No fallback, retry, or coordination mechanism is triggered by notification invisibility.
+
+Notification interactions therefore function strictly as **optional benign cover behavior**.
 
 ### Notes
 - Notification access is **read-oriented** and represents routine GitHub usage.
