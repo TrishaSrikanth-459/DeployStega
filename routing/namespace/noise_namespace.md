@@ -138,21 +138,6 @@ GitHub delivers notifications as threads, where each thread represents the curre
 - **GUI action:** Use bulk **Mark as read** on the filtered results.
 - **Note:** There is no stable, separate URL; this is an action performed on the page.
 
-### Notification Reasons
-Each notification thread includes a `reason` field indicating why the notification was generated.  
-Reasons include (but are not limited to):
-
-- `assign`
-- `author`
-- `comment`
-- `mention`
-- `review_requested`
-- `subscribed`
-- `state_change`
-- `ci_activity`
-- `security_alert`
-
-The reason is **thread-specific** and may change over time.
 
 ## Notification Visibility and User Settings (Environmental Dependency)
 
