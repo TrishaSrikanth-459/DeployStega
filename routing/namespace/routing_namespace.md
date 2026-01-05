@@ -416,3 +416,44 @@ A commit comment is uniquely identified by the ordered tuple
   **assumed not to occur** within the experimental scope.
 
 ---
+
+## Artifact Class: GitTag
+
+### Description
+Git tags are **immutable, named pointers** to particular repository states.
+Tag visibility via the GUI is **near-immediate** after creation.
+A release is a user-curated wrapper around a tag that presents a specific repository state as a named, documented distribution.
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+- tag: string
+
+### Identifier Construction Rule
+A GitTag is uniquely identified by the ordered tuple
+(owner, repo, tag).
+
+### Addressability (Sender)
+1. Edit an existing tag's title, description, or associated assets
+   - URL: 
+
+### Addressability (Receiver)
+1. View all tags for a repository
+  - URL: https://github.com/{owner}/{repo}/tags
+2. View all releases for a repository
+  - https://github.com/{owner}/{repo}/releases
+3. View the title, description, and assets associated with a specific tag
+  - https://github.com/{owner}/{repo}/releases/tag/{tag}
+4. View repository state at a specific tag
+  - URL: https://github.com/{owner}/{repo}/tree/{tag}
+
+### Notes and Boundaries
+- The following are **explicitly out of scope and unmodeled**:
+   - direct manipulation of Git references,
+   - raw Git protocol operations,
+   - API-level tag creation or retrieval,
+   - semantic interpretation of tag names,
+   - release asset uploads,
+   - release notes content analysis,
+   - reactions to tag creation events.
+ 
