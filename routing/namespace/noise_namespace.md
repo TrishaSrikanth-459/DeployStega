@@ -120,3 +120,36 @@ Event feeds include up to **300 events**, limited to **the past 30 days**
   the risk profile of visiting the repository activity page.
   
 ---
+
+# Interaction Class: Starring
+
+## Description
+Starring represents a per-user bookmarking action that records a GitHub user’s interest in a repository.
+Specifically, a star is a persistent preference indicator used for discovery, ranking, and personal organization.
+
+## Identifier Fields
+
+### Repository identity
+- owner: string
+- repo: string
+- viewer: string
+
+## Addressability (Sender and Receiver)
+
+### View a repository’s stargazers (who starred it)
+- **GUI URL:** https://github.com/{owner}/{repo}/stargazers
+
+### View repositories starred by a user
+- **GUI URL:** https://github.com/{username}?tab=stars
+- **Notes:** Publicly visible list is constrained by the user’s profile visibility and repository visibility.
+
+## Notes and Boundaries
+- **Stars are stateful, not immutable logs.**  
+  The star relationship persists until explicitly removed.
+- **List views are observational and can be incomplete due to visibility constraints.**  
+  Private repositories and user privacy settings can affect what appears in stargazer/starred listings.
+- **Pagination, ordering, and timestamp media types are presentation-layer details.**  
+  Query parameters such as `per_page`, `page`, `sort`, `direction`, and optional timestamp-including media types
+  do not define separate interaction surfaces in this model.
+
+---
