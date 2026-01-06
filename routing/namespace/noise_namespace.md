@@ -127,23 +127,20 @@ Event feeds include up to **300 events**, limited to **the past 30 days**
 Starring represents a per-user bookmarking action that records a GitHub user’s interest in a repository.
 Specifically, a star is a persistent preference indicator used for discovery, ranking, and personal organization.
 
-## Identifier Fields
-
-### Repository identity
+### Identifier Fields
 - owner: string
 - repo: string
 - viewer: string
 
-## Addressability (Sender and Receiver)
-
-### View a repository’s stargazers (who starred it)
+### Addressability (Sender and Receiver)
+#### View a repository’s stargazers (who starred it)
 - **GUI URL:** https://github.com/{owner}/{repo}/stargazers
 
-### View repositories starred by a user
+#### View repositories starred by a user
 - **GUI URL:** https://github.com/{username}?tab=stars
 - **Notes:** Publicly visible list is constrained by the user’s profile visibility and repository visibility.
 
-## Notes and Boundaries
+### Notes and Boundaries
 - **Stars are stateful, not immutable logs.**  
   The star relationship persists until explicitly removed.
 - **List views are observational and can be incomplete due to visibility constraints.**  
