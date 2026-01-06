@@ -417,7 +417,7 @@ A commit comment is uniquely identified by the ordered tuple
 
 ---
 
-## Artifact Class: GitTag
+### Artifact Class: GitTag
 
 ### Description
 Git tags are **immutable, named pointers** to particular repository states.
@@ -455,9 +455,9 @@ A GitTag is uniquely identified by the ordered tuple
 
 ---
 
-# Artifact Class: Label
+### Artifact Class: Label
 
-## Description
+### Description
 Labels are **named, repository-defined identifiers** used to categorize and organize issues and pull requests.  
 
 ### Identifier Fields
@@ -487,9 +487,9 @@ A Label is uniquely identified by the ordered tuple
 
  ---
 
-# Artifact Class: Milestone
+### Artifact Class: Milestone
 
-## Description
+### Description
 A milestone is a **named planning artifact** used to group issues and pull requests around a target goal or deadline.  
 
 ### Identifier Fields
