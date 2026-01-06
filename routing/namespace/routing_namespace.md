@@ -448,8 +448,77 @@ A GitTag is uniquely identified by the ordered tuple
 4. View repository state at a specific tag
   - URL: https://github.com/{owner}/{repo}/tree/{tag}
 
-### Notes and Boundaries
+### Notes
 - Tag editing does not alter the identifier.
 - Identifier-changing operations such as the creation of new tags or the deletion of existing tags are
   **assumed not to occur** within the experimental scope.
- 
+
+---
+
+# Artifact Class: Label
+
+## Description
+Labels are **named, repository-defined identifiers** used to categorize and organize issues and pull requests.  
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+- label_name: string
+
+### Identifier Construction Rule
+A Label is uniquely identified by the ordered tuple
+(owner, repo, label_name).
+
+### Addressability (Sender)
+#### Edit a particular label
+  - URL: https://github.com/{owner}/{repo}/labels
+    - Scroll down to the particular label, click "...," click "edit," update the "Name" or "Description" as desired, and finally, click "Save changes."
+
+### Addressability (Receiver)
+#### View all labels defined in the repository
+  - URL: https://github.com/{owner}/{repo}/labels
+#### View a specific label
+  - URL: https://github.com/{owner}/{repo}/issues?q=state%3Aopen%20label%3A%22{label_name}%22
+    - If the label name includes spaces, replace them with "%20" 
+
+### Notes
+- Creating or deleting labels constitute **snapshot-mutating actions** and are therefore out of scope.
+- More query filtering and/or sorting, with the exception of querying for specific labels, are considered **presentation-layer variations**.
+
+ ---
+
+# Artifact Class: Milestone
+
+## Description
+A milestone is a **named planning artifact** used to group issues and pull requests around a target goal or deadline.  
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+- milestone_number: integer  
+- milestone_title: string
+
+### Identifier Construction Rule
+A Milestone is uniquely identified by the ordered tuple
+(owner, repo, milestone_number, milestone_title).
+
+### Addressability (Sender)
+#### Update milestone metadata (title, description, due date, state)
+  - URL: https://github.com/{owner}/{repo}/milestones/{milestone_number}/edit
+    - Sender may edit the "Title," "Due Date (options)," and/or "Description (options)," before, finally, clicking "Save changes." 
+
+## Addressability (Receiver)
+#### View all milestones defined in the repository
+  - URL: https://github.com/{owner}/{repo}/milestones
+#### View a specific milestone
+  - URL: https://github.com/{owner}/{repo}/milestone/{milestone_number}
+    - Shows milestone metadata and the list of associated issues and pull requests.
+
+### Notes 
+- Milestone visibility and updates are **reflected immediately** in the GitHub GUI.
+- Milestones may exist in `open` or `closed` states; such states are not modeled in the experiment.
+- Further sorting, filtering, and pagination indicators are treated as **presentation-layer variations** and are not modeled as independent interactions.
+- Identifier-changing operations such as the creation of new milestones or the closure/deletion of existing milestones are
+  **assumed not to occur** within the experimental scope.
+
+---
