@@ -442,9 +442,9 @@ A GitTag is uniquely identified by the ordered tuple
 1. View all tags for a repository
   - URL: https://github.com/{owner}/{repo}/tags
 2. View all releases for a repository
-  - https://github.com/{owner}/{repo}/releases
+  - URL: https://github.com/{owner}/{repo}/releases
 3. View the title, description, and assets associated with a specific tag
-  - https://github.com/{owner}/{repo}/releases/tag/{tag}
+  - URL: https://github.com/{owner}/{repo}/releases/tag/{tag}
 4. View repository state at a specific tag
   - URL: https://github.com/{owner}/{repo}/tree/{tag}
 
