@@ -435,7 +435,8 @@ A GitTag is uniquely identified by the ordered tuple
 
 ### Addressability (Sender)
 1. Edit an existing tag's title, description, or associated assets
-   - URL: 
+   - URL: https://github.com/{owner}/{repo}/releases/tag/{tag}
+       - Sender may edit the title and/or description as weell as upload relevant files before finally clicking "update release." 
 
 ### Addressability (Receiver)
 1. View all tags for a repository
@@ -448,12 +449,7 @@ A GitTag is uniquely identified by the ordered tuple
   - URL: https://github.com/{owner}/{repo}/tree/{tag}
 
 ### Notes and Boundaries
-- The following are **explicitly out of scope and unmodeled**:
-   - direct manipulation of Git references,
-   - raw Git protocol operations,
-   - API-level tag creation or retrieval,
-   - semantic interpretation of tag names,
-   - release asset uploads,
-   - release notes content analysis,
-   - reactions to tag creation events.
+- Tag editing does not alter the identifier.
+- Identifier-changing operations such as the creation of new tags or the deletion of existing tags are
+  **assumed not to occur** within the experimental scope.
  
