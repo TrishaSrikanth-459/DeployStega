@@ -60,19 +60,6 @@ but do not alter any identifier-defining fields specified in this routing namesp
 
 ---
 
-## Noise and Benign Activity
-The routing namespace includes artifact classes that appear in benign
-platform activity regardless of whether they are used for signaling.
-
-The presence of benign accesses to routing artifacts is intentional.
-Noise is modeled implicitly through the natural prevalence and access
-distribution of artifact classes, rather than through separate
-noise-specific artifacts.
-
-No artifact in the namespace is assumed to be signaling by default.
-
----
-
 ## Access-Control Considerations
 Identifier definitions are independent of permissions such that they specify
 **how artifacts are named**, not **who can access or modify them**, and are
