@@ -95,9 +95,9 @@ GitHub sends **repository-scoped discussion activity** - including issues, pull 
 
 ---
 
-# Interaction Class: Events
+## Interaction Class: Events
 
-## Description
+### Description
 Events are immutable activity records emitted by GitHub whenever an actor (humans, bots, automation) performs an action.
 Event streams are not real-time views of repository activity; actions may appear in event feeds with a delay ranging from tens of seconds to several hours.
 Event feeds include up to **300 events**, limited to **the past 30 days**
@@ -118,12 +118,12 @@ Event feeds include up to **300 events**, limited to **the past 30 days**
 - **Detectability impact from filtering is implicit, not explicit.**
   While UI filters can influence detectability, the model does not treat filtering as an independently observable or addressable action. All filtering effects are subsumed into
   the risk profile of visiting the repository activity page.
-  
+
 ---
 
-# Interaction Class: Starring
+## Interaction Class: Starring
 
-## Description
+### Description
 Starring represents a per-user bookmarking action that records a GitHub user’s interest in a repository.
 Specifically, a star is a persistent preference indicator used for discovery, ranking, and personal organization.
 
@@ -147,24 +147,24 @@ Specifically, a star is a persistent preference indicator used for discovery, ra
 
 ---
 
-# Interaction Class: Watching 
+## Interaction Class: Watching 
 
-## Description
+### Description
 The Watching class captures all users subscribed to (in other words, watching) a repository.
 This class does **not** model subscription changes, notification preferences, or any snapshot-mutating actions.
 
-## Identifier Fields
+### Identifier Fields
 - owner: string  
 - repo: string  
 
-## Addressability (Sender and Receiver)
+### Addressability (Sender and Receiver)
 ### List all users subscribed a repository
 - **GUI URL:** https://github.com/{owner}/{repo}/watchers
 
-## Notes and Boundaries
+### Notes and Boundaries
 - **Activities beyond visiting the URL are not modeled.**  
   Viewing subscribed users' profiles, following their accounts, or attempting to order/filter the list of subscribors are out of scope. 
-  
+
 ---
 
 ## Interaction Class: Branches
@@ -185,7 +185,6 @@ Branches are **named, mutable references** to a sequence of commits.
 - **GUI URL:**  
 https://github.com/{owner}/{repo}/tree/{branch}
 
-
 ### Notes and Boundaries
 - Branch creation, renaming, deletion, merging, syncing, or protection changes are explicitly excluded.
 - No branch identifier minting is modeled.
@@ -196,7 +195,6 @@ https://github.com/{owner}/{repo}/tree/{branch}
 ## Interaction Class: Actions
 
 ### Description
-
 Actions model **inspection of available GitHub Actions workflows and templates** within a repository.  
 
 ### Identifier Fields
@@ -204,34 +202,31 @@ Actions model **inspection of available GitHub Actions workflows and templates**
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-
 #### View available workflow templates
 - **GUI URL:** https://github.com/{owner}/{repo}/actions/new
 
 ### Notes and Boundaries
 - This interaction is **purely observational** and does not start, schedule, or execute workflows.
 - Further queries to filter or modify presence, ordering, or availability of workflow templates are **presentation-level variations** of the same interaction class.
-  
+
 ---
 
-# Interaction Class: Repository Governance Settings
+## Interaction Class: Repository Governance Settings
 
-## Description
-
+### Description
 Repository Governance Settings expose administrative configurations governing repository ownership, access control, branch rules, tag protections, and rulesets.  
 
-## Identifier Fields
-
+### Identifier Fields
 - owner: string  
 - repo: string  
 
-## Addressability (Sender and Receiver)
+### Addressability (Sender and Receiver)
 ### View general repository settings
 - **GUI URL:** https://github.com/{owner}/{repo}/settings
-  
+
 ### View repository settings related to collaborators
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/access
-  
+
 ### View repository settings related to branches
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/branches
 
@@ -241,25 +236,22 @@ Repository Governance Settings expose administrative configurations governing re
 ### View repository settings related to rulesets
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/rules
 
-## Notes and Boundaries
+### Notes and Boundaries
 - Any mutation of repository settings is excluded to avoid non-linguistic signaling.  
 - Visibility of these pages depends on collaborator status.
 
 ---
 
-# Interaction Class: Automation & Execution Settings
+## Interaction Class: Automation & Execution Settings
 
-## Description
-
+### Description
 Automation & Execution Settings expose configuration state related to CI/CD workflows, runners, and deployment environments.  
 
-## Identifier Fields
-
+### Identifier Fields
 - owner: string  
 - repo: string  
 
-## Addressability (Sender and Receiver)
-
+### Addressability (Sender and Receiver)
 ### View general automation and execution settings
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/actions
 
@@ -269,24 +261,21 @@ Automation & Execution Settings expose configuration state related to CI/CD work
 ### View automation and execution settings related to environments
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/environments
 
-## Notes and Boundaries
-- This interaction is observational only and does not start workflows, alter runner states, or modify anything else.  
+### Notes and Boundaries
+- This interaction is observational only and does not start workflows, alter runner states, or modify anything else.
 
 ---
 
-# Interaction Class: Security & Secrets Settings
+## Interaction Class: Security & Secrets Settings
 
-## Description
-
+### Description
 Security & Secrets Settings expose repository security posture, including secret storage, deploy keys, and security analysis configuration.  
 
-## Identifier Fields
-
+### Identifier Fields
 - owner: string  
 - repo: string  
 
-## Addressability (Sender and Receiver)
-
+### Addressability (Sender and Receiver)
 ### View general security and secrets settings
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/security_analysis
 
@@ -302,26 +291,22 @@ Security & Secrets Settings expose repository security posture, including secret
 ### View security and secrets settings related to dependabot
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/secrets/dependabot
 
-## Notes and Boundaries
-
+### Notes and Boundaries
 - This interaction does not add, remove, rotate, or modify secrets or keys.  
-- Security scanners, alerts, and analyses are observed, not triggered.  
+- Security scanners, alerts, and analyses are observed, not triggered.
 
 ---
 
-# Interaction Class: Integrations & Extensions Settings
+## Interaction Class: Integrations & Extensions Settings
 
-## Description
-
+### Description
 Integrations & Extensions Settings expose configurations related to third-party services, webhooks, and development environments connected to the repository.
 
-## Identifier Fields
-
+### Identifier Fields
 - owner: string  
 - repo: string  
 
-## Addressability (Sender and Receiver)
-
+### Addressability (Sender and Receiver)
 ### View general integrations and extensions
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/hooks
 
@@ -331,25 +316,21 @@ Integrations & Extensions Settings expose configurations related to third-party 
 ### View integrations and extensions related to codespaces
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/codespaces
 
-## Notes and Boundaries
-
-- Webhooks, installations, and codespaces are not created, removed, or edited.  
+### Notes and Boundaries
+- Webhooks, installations, and codespaces are not created, removed, or edited.
 
 ---
 
-# Interaction Class: AI & Model Policy Settings
+## Interaction Class: AI & Model Policy Settings
 
-## Description
-
+### Description
 AI & Model Policy Settings expose policy controls governing AI-assisted features, including Copilot behaviors and model access rules.  
 
-## Identifier Fields
-
+### Identifier Fields
 - owner: string  
 - repo: string  
 
-## Addressability (Sender and Receiver)
-
+### Addressability (Sender and Receiver)
 ### View general AI and model policies
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/copilot/code_review
 
@@ -359,39 +340,33 @@ AI & Model Policy Settings expose policy controls governing AI-assisted features
 ### View AI and model policies related to access policies
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/models/access-policy
 
-## Notes and Boundaries
-
-- This interaction does not enable, disable, or modify AI behavior.   
+### Notes and Boundaries
+- This interaction does not enable, disable, or modify AI behavior.
 
 ---
 
-# Interaction Class: Publishing & Notification Settings
+## Interaction Class: Publishing & Notification Settings
 
-## Description
-
+### Description
 Publishing & Notification Settings expose configurations related to public-facing outputs and notification preferences for the repository.
 
-## Identifier Fields
-
+### Identifier Fields
 - owner: string  
 - repo: string  
 
-## Addressability (Sender and Receiver)
-
+### Addressability (Sender and Receiver)
 ### View publishing and notification settings
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/pages
 
-## Notes and Boundaries
-
+### Notes and Boundaries
 - This interaction does not publish content or send notifications.  
 - GitHub Pages configuration and notification preferences are observed only.
 
- ---
+---
 
- ## Interaction Class: Repository Security
+## Interaction Class: Repository Security
 
 ### Description
-
 Repository Security Overview exposes **derived security and risk posture** for a repository, including vulnerability alerts, dependency update status, and published security policies.
 
 ### Identifier Fields
@@ -399,26 +374,22 @@ Repository Security Overview exposes **derived security and risk posture** for a
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-
 #### View repository security overview
-- **GUI URL:**  
-  https://github.com/{owner}/{repo}/security
+- **GUI URL:** https://github.com/{owner}/{repo}/security
 
 ### Notes and Boundaries
-
 - This interaction **does not**:
   - enable or disable security features
   - acknowledge alerts
   - configure Dependabot
   - edit security policies
-- Navigation between subpages (etc. https://github.com/{owner}/{repo}/security/policy) carries **no meaning**.
+- Navigation between subpages carries **no meaning**.
 
 ---
 
 ## Interaction Class: Dependency Network Inspection
 
 ### Description
-
 Dependency Network Inspection exposes **derived, system-computed views** of a repository’s dependency topology and update relationships.  
 These views reflect how the repository depends on external packages and how dependency-related updates propagate, without enabling configuration or control.
 
@@ -427,7 +398,6 @@ These views reflect how the repository depends on external packages and how depe
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-
 #### View repository dependency network
 - **GUI URL:** https://github.com/{owner}/{repo}/network/dependencies  
 
@@ -437,6 +407,4 @@ These views reflect how the repository depends on external packages and how depe
 ### Notes and Boundaries
 - These pages do **not** modify repository configuration, security posture, or automation behavior.
 - Pagination, layout, and further query filtering are treated as **presentation-layer behavior**, not distinct interactions.
-
---- 
 
