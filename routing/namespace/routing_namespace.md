@@ -6,7 +6,7 @@ The routing namespace enumerates all addressable artifact classes exposed
 by the application and specifies their identifier schemas.
 
 The namespace is structural only: it specifies what artifacts exist and
-how they are identified, not when or how they are accessed.
+how they are identified, not when they are accessed.
 
 ---
 
