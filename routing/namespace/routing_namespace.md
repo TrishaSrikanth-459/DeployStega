@@ -507,7 +507,7 @@ A Milestone is uniquely identified by the ordered tuple
   - URL: https://github.com/{owner}/{repo}/milestones/{milestone_number}/edit
     - Sender may edit the "Title," "Due Date (options)," and/or "Description (options)," before, finally, clicking "Save changes." 
 
-## Addressability (Receiver)
+### Addressability (Receiver)
 #### View all milestones defined in the repository
   - URL: https://github.com/{owner}/{repo}/milestones
 #### View a specific milestone
