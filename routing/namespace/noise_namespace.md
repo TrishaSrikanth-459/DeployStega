@@ -47,7 +47,7 @@ The benign interaction namespace is **resolver-adjacent but routing-orthogonal**
 | Property | Dead-Drop Namespace | Benign Interaction Namespace |
 |--------|---------------------|------------------------------|
 | Selected per epoch | Yes | Yes |
-| Snapshot-enumerated | Yes | Yes |
+| Snapshot-enumerated | Yes | No |
 | Identifier-bound | Yes | Yes |
 | Encodes payload | Yes | No |
 | Used for rendezvous | Yes | No |
