@@ -71,6 +71,15 @@ No additional guarantees of reliability, visibility, availability, or privilege 
 
 ---
 
+## Detectability Note
+Some artifacts in the **Benign Interaction Namespace** may be deemed **more detectable** than those in the **routing (dead-drop) namespace** under certain adversarial models. 
+Despite such factors, these interactions are classified as *benign noise* strictly because:
+   - they **never encode covert payloads**, and
+   - they are **never used for rendezvous or routing decisions**.
+All covert communication semantics are confined exclusively to the **routing namespace**.  
+
+---
+
 ## Interaction Class: Notifications_Benign
 
 ### Description
