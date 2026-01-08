@@ -158,7 +158,7 @@ This class does **not** model subscription changes, notification preferences, or
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-### List all users subscribed a repository
+#### List all users subscribed a repository
 - **GUI URL:** https://github.com/{owner}/{repo}/watchers
 
 ### Notes and Boundaries
@@ -202,7 +202,7 @@ Actions model **inspection of available GitHub Actions workflows and templates**
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-#### View available workflow templates
+##### View available workflow templates
 - **GUI URL:** https://github.com/{owner}/{repo}/actions/new
 
 ### Notes and Boundaries
@@ -221,19 +221,19 @@ Repository Governance Settings expose administrative configurations governing re
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-### View general repository settings
+#### View general repository settings
 - **GUI URL:** https://github.com/{owner}/{repo}/settings
 
-### View repository settings related to collaborators
+#### View repository settings related to collaborators
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/access
 
-### View repository settings related to branches
+#### View repository settings related to branches
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/branches
 
-### View repository settings related to tags
+#### View repository settings related to tags
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/tag_protection
 
-### View repository settings related to rulesets
+#### View repository settings related to rulesets
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/rules
 
 ### Notes and Boundaries
@@ -252,13 +252,13 @@ Automation & Execution Settings expose configuration state related to CI/CD work
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-### View general automation and execution settings
+#### View general automation and execution settings
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/actions
 
-### View automation and execution settings related to runners
+#### View automation and execution settings related to runners
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/actions/runners
 
-### View automation and execution settings related to environments
+#### View automation and execution settings related to environments
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/environments
 
 ### Notes and Boundaries
@@ -276,19 +276,19 @@ Security & Secrets Settings expose repository security posture, including secret
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-### View general security and secrets settings
+#### View general security and secrets settings
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/security_analysis
 
-### View security and secrets settings related to keys
+#### View security and secrets settings related to keys
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/keys
 
-### View security and secrets settings related to actions
+#### View security and secrets settings related to actions
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/secrets/actions
 
-### View security and secrets settings related to codespaces
+#### View security and secrets settings related to codespaces
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/secrets/codespaces
 
-### View security and secrets settings related to dependabot
+#### View security and secrets settings related to dependabot
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/secrets/dependabot
 
 ### Notes and Boundaries
@@ -307,13 +307,13 @@ Integrations & Extensions Settings expose configurations related to third-party 
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-### View general integrations and extensions
+#### View general integrations and extensions
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/hooks
 
-### View integrations and extensions related to installations
+#### View integrations and extensions related to installations
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/installations
 
-### View integrations and extensions related to codespaces
+#### View integrations and extensions related to codespaces
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/codespaces
 
 ### Notes and Boundaries
@@ -331,13 +331,13 @@ AI & Model Policy Settings expose policy controls governing AI-assisted features
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-### View general AI and model policies
+#### View general AI and model policies
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/copilot/code_review
 
-### View AI and model policies related to coding agents
+#### View AI and model policies related to coding agents
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/copilot/coding_agent
 
-### View AI and model policies related to access policies
+#### View AI and model policies related to access policies
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/models/access-policy
 
 ### Notes and Boundaries
@@ -355,7 +355,7 @@ Publishing & Notification Settings expose configurations related to public-facin
 - repo: string  
 
 ### Addressability (Sender and Receiver)
-### View publishing and notification settings
+#### View publishing and notification settings
 - **GUI URL:** https://github.com/{owner}/{repo}/settings/pages
 
 ### Notes and Boundaries
