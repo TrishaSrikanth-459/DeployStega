@@ -71,7 +71,7 @@ No additional guarantees of reliability, visibility, availability, or privilege 
 
 ---
 
-## Interaction Class: Notifications
+## Interaction Class: Notifications_Benign
 
 ### Description
 
@@ -95,7 +95,7 @@ GitHub sends **repository-scoped discussion activity** - including issues, pull 
 
 ---
 
-## Interaction Class: Events
+## Interaction Class: Events_Benign
 
 ### Description
 Events are immutable activity records emitted by GitHub whenever an actor (humans, bots, automation) performs an action.
@@ -121,7 +121,7 @@ Event feeds include up to **300 events**, limited to **the past 30 days**
 
 ---
 
-## Interaction Class: Starring
+## Interaction Class: Starring_Benign
 
 ### Description
 Starring represents a per-user bookmarking action that records a GitHub user’s interest in a repository.
@@ -147,7 +147,7 @@ Specifically, a star is a persistent preference indicator used for discovery, ra
 
 ---
 
-## Interaction Class: Watching 
+## Interaction Class: Watching_Benign
 
 ### Description
 The Watching class captures all users subscribed to (in other words, watching) a repository.
@@ -167,7 +167,7 @@ This class does **not** model subscription changes, notification preferences, or
 
 ---
 
-## Interaction Class: Branches
+## Interaction Class: Branches_Benign
 
 ### Description
 Branches are **named, mutable references** to a sequence of commits.
@@ -211,7 +211,7 @@ Actions model **inspection of available GitHub Actions workflows and templates**
 
 ---
 
-## Interaction Class: Repository Governance Settings
+## Interaction Class: RepositoryGovernanceSettings_Benign
 
 ### Description
 Repository Governance Settings expose administrative configurations governing repository ownership, access control, branch rules, tag protections, and rulesets.  
@@ -242,7 +242,7 @@ Repository Governance Settings expose administrative configurations governing re
 
 ---
 
-## Interaction Class: Automation & Execution Settings
+## Interaction Class: AutomationAndExecutionSettings_Benign
 
 ### Description
 Automation & Execution Settings expose configuration state related to CI/CD workflows, runners, and deployment environments.  
@@ -266,7 +266,7 @@ Automation & Execution Settings expose configuration state related to CI/CD work
 
 ---
 
-## Interaction Class: Security & Secrets Settings
+## Interaction Class: SecurityAndSecretsSettings_Benign
 
 ### Description
 Security & Secrets Settings expose repository security posture, including secret storage, deploy keys, and security analysis configuration.  
@@ -297,7 +297,7 @@ Security & Secrets Settings expose repository security posture, including secret
 
 ---
 
-## Interaction Class: Integrations & Extensions Settings
+## Interaction Class: IntegrationsAndExtensionsSettings_Benign
 
 ### Description
 Integrations & Extensions Settings expose configurations related to third-party services, webhooks, and development environments connected to the repository.
@@ -321,7 +321,7 @@ Integrations & Extensions Settings expose configurations related to third-party 
 
 ---
 
-## Interaction Class: AI & Model Policy Settings
+## Interaction Class: AIAndModelPolicySettings_Benign
 
 ### Description
 AI & Model Policy Settings expose policy controls governing AI-assisted features, including Copilot behaviors and model access rules.  
@@ -345,7 +345,7 @@ AI & Model Policy Settings expose policy controls governing AI-assisted features
 
 ---
 
-## Interaction Class: Publishing & Notification Settings
+## Interaction Class: PublishingAndNotificationSettings_Benign
 
 ### Description
 Publishing & Notification Settings expose configurations related to public-facing outputs and notification preferences for the repository.
@@ -364,7 +364,7 @@ Publishing & Notification Settings expose configurations related to public-facin
 
 ---
 
-## Interaction Class: Repository Security
+## Interaction Class: RepositorySecurity_Benign
 
 ### Description
 Repository Security Overview exposes **derived security and risk posture** for a repository, including vulnerability alerts, dependency update status, and published security policies.
@@ -387,7 +387,7 @@ Repository Security Overview exposes **derived security and risk posture** for a
 
 ---
 
-## Interaction Class: Dependency Network Inspection
+## Interaction Class: DependencyNetworkInspection_Benign
 
 ### Description
 Dependency Network Inspection exposes **derived, system-computed views** of a repository’s dependency topology and update relationships.  
@@ -413,7 +413,7 @@ These views reflect how the repository depends on external packages and how depe
 
 ---
 
-## Interaction Class: Forks
+## Interaction Class: Forks_Benign
 
 ### Description
 
@@ -431,8 +431,167 @@ Forks expose a **derived, system-maintained view** of repositories that were cre
 ### Notes and Boundaries
 
 - **Fork creation is not modeled.**  
-  Creating a fork is a state-mutating, externally visible action and is explicitly excluded.
+  Creating a fork is an externally visible action and is explicitly excluded.
 - **Fork existence is not modeled.**  
   Whether forks appear depends on actions taken by other users and is outside the model’s control.
 - **Sorting, filtering, and pagination are presentation-layer behaviors.**  
   UI controls or query parameters do not constitute distinct interaction surfaces.
+
+---
+
+## Interaction Class: Milestones_Benign
+
+### Description
+
+Milestones expose a **repository-scoped planning view** that groups issues and pull requests by project-defined targets, deadlines, or phases.
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+
+### Addressability (Sender and Receiver)
+
+#### View all milestones defined in the repository
+- **GUI URL:** https://github.com/{owner}/{repo}/milestones
+
+### Notes and Boundaries
+
+- **This class is observational only,**
+  Milestone mutation belongs to the routing namespace. 
+- **Milestone membership is not modeled.**  
+  The association of issues or pull requests to milestones is outside the scope of this interaction.
+- **Sorting, filtering, and pagination are presentation-layer behaviors.**  
+  UI controls or query parameters do not constitute distinct interaction surfaces.
+
+
+---
+
+## Interaction Class: Labels_Benign
+
+### Description
+
+Labels expose a **repository-scoped classification view** that enumerates all label definitions used to categorize issues and pull requests.
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+
+### Addressability (Sender and Receiver)
+
+#### View all labels defined in the repository
+- **GUI URL:** https://github.com/{owner}/{repo}/labels
+
+### Notes and Boundaries
+
+-- **This class is observational only,**
+  Label mutation belongs to the routing namespace. 
+- **Visual styling (color, ordering) is presentation-layer behavior.**  
+  These attributes do not define separate interaction surfaces.
+
+
+---
+
+## Interaction Class: GitTags_Benign
+
+### Description
+
+Git tags expose a **repository-scoped version reference view** that lists immutable tag pointers identifying specific commits in the repository history.
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+
+### Addressability (Sender and Receiver)
+
+#### View all tags for a repository
+- **GUI URL:** https://github.com/{owner}/{repo}/tags
+
+#### View all releases for a repository
+- **GUI URL:** https://github.com/{owner}/{repo}/releases
+
+#### View repository state at a specific tag
+- **GUI URL:** https://github.com/{owner}/{repo}/tree/{tag}
+
+### Notes and Boundaries
+
+- **This class is observational only,**
+  Tag mutation belongs to the routing namespace. 
+- **Release metadata (assets, notes) is not modeled.**  
+  Only the existence of the release listing surface is captured.
+
+---
+
+## Interaction Class: Commits_Benign
+
+### Description
+
+Commits expose a **branch-scoped historical activity view** that lists the sequence of commits reachable from a specified branch reference.
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+- branch: string  
+
+### Addressability (Sender and Receiver)
+
+#### Access all commits for a specified branch
+- **GUI URL:** https://github.com/{owner}/{repo}/commits/{branch}
+
+### Notes and Boundaries
+
+- **This class is observational only,**
+  Commit mutation belongs to the routing namespace. 
+- **Branch resolution is implicit.**  
+  The branch name is resolved to a commit graph by Git.
+- **Commit detail pages are not separately modeled.**  
+  Individual commit inspection is treated as a drill-down from this interaction.
+
+
+---
+
+## Interaction Class: PullRequests_Benign
+
+### Description
+
+Pull requests expose a **repository-scoped collaboration view** that aggregates all open and closed pull requests associated with the repository.
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+
+### Addressability (Sender and Receiver)
+
+#### View all pull requests
+- **GUI URL:** https://github.com/{owner}/{repo}/pulls
+
+### Notes and Boundaries
+
+- **This class is observational only,**
+  Pull request mutation belongs to the routing namespace. 
+- **Filtering and search controls are presentation-layer behaviors.**  
+  They do not define new interaction classes.
+
+
+---
+
+## Interaction Class: Issues_Benign
+
+### Description
+
+Issues expose a **repository-scoped tracking view** that lists all reported issues used for bug tracking, task management, and discussion.
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+
+### Addressability (Sender and Receiver)
+
+#### View all issues
+- **GUI URL:** https://github.com/{owner}/{repo}/issues
+
+### Notes and Boundaries
+
+- **This class is observational only,**
+  Issue mutation belongs to the routing namespace. 
+- **Sorting, filtering, and pagination are presentation-layer behaviors.**  
+  They do not constitute distinct interactions.
