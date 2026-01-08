@@ -402,9 +402,37 @@ These views reflect how the repository depends on external packages and how depe
 - **GUI URL:** https://github.com/{owner}/{repo}/network/dependencies  
 
 #### View dependency-related updates
-- **GUI URL:** https://github.com/{owner}/{repo}/network/updates  
+- **GUI URL:** https://github.com/{owner}/{repo}/network/updates
+
+#### View all forks in tree-mode
+- **GUI URL:** https://github.com/{owner}/{repo}/network/members
 
 ### Notes and Boundaries
 - These pages do **not** modify repository configuration, security posture, or automation behavior.
 - Pagination, layout, and further query filtering are treated as **presentation-layer behavior**, not distinct interactions.
 
+---
+
+## Interaction Class: Forks
+
+### Description
+
+Forks expose a **derived, system-maintained view** of repositories that were created as forks of the current repository.  
+
+### Identifier Fields
+- owner: string  
+- repo: string  
+
+### Addressability (Sender and Receiver)
+
+#### View all forks of the repository
+- **GUI URL:** https://github.com/{owner}/{repo}/forks
+
+### Notes and Boundaries
+
+- **Fork creation is not modeled.**  
+  Creating a fork is a state-mutating, externally visible action and is explicitly excluded.
+- **Fork existence is not modeled.**  
+  Whether forks appear depends on actions taken by other users and is outside the model’s control.
+- **Sorting, filtering, and pagination are presentation-layer behaviors.**  
+  UI controls or query parameters do not constitute distinct interaction surfaces.
