@@ -85,7 +85,7 @@ For the duration of the experiment:
 - Otherwise, the role performs **exactly one interaction attempt** derived from the resolver output.
 
 Participants do **not** choose which epochs to visit; they are required to follow the resolver's instructions exactly. 
-Further, participants are not allowed to visit any urls outside the provided urls for that epoch.
+Further, participants are not allowed to visit any urls associated with the GitHub repo outside the provided urls for that epoch.
 
 ---
 
