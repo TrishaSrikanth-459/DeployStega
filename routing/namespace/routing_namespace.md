@@ -204,7 +204,7 @@ An issue is uniquely identified by the ordered triple
   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ### Notes
-- Editing issue fields (title, body, labels, assignees, lock state, open/closed)
+- Editing issue fields (body, labels, assignees, lock state, open/closed)
   does not change the identifier.
 - Identifier-changing operations such as issue transfer or deletion are platform-defined
   but are **assumed not to occur** within the experimental scope.
@@ -234,7 +234,7 @@ A pull request is uniquely identified by the ordered tuple
 #### Modifies mutable pull request fields
    - REST API: PATCH /repos/{owner}/{repo}/pulls/{pull_number}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
-       - Upon visiting the URL, the sender must click "Edit" to the right of the pull request's title to edit the title; the sender must or click "..." and then "Edit" near the top right of the pull request's body to edit the body.
+       - Upon visiting the URL, the sender must or click "..." and then "Edit" near the top right of the pull request's body to edit the body.
 
 ### Addressability (Sender and Receiver)
 #### View an existing pull request. 
@@ -417,9 +417,9 @@ A GitTag is uniquely identified by the ordered tuple
 (owner, repo, tag).
 
 ### Addressability (Sender)
-#### Edit an existing tag's title, description, or associated assets
+#### Edit an existing tag's description or associated assets
    - URL: https://github.com/{owner}/{repo}/releases/tag/{tag}
-       - Sender may edit the title and/or description as weell as upload relevant files before finally clicking "update release." 
+       - Sender may edit the description as weell as upload relevant files before finally clicking "update release." 
 
 ### Addressability (Sender and Receiver)
 #### View the title, description, and assets associated with a specific tag
@@ -480,10 +480,10 @@ A Milestone is uniquely identified by the ordered tuple
 (owner, repo, milestone_number).
 
 ### Addressability (Sender)
-#### Update milestone metadata (title, description, due date, state)
+#### Update milestone metadata (description, due date, state)
   - REST API: patch/repos/{owner}/{repo}/milestones/{milestone_number}
   - URL: https://github.com/{owner}/{repo}/milestones/{milestone_number}/edit
-    - Sender may edit the "Title," "Due Date (options)," and/or "Description (options)," before, finally, clicking "Save changes." 
+    - Sender may edit the "Due Date (options)" and/or "Description (options)" before, finally, clicking "Save changes." 
 
 ### Addressability (Sender and Receiver)
 #### View a specific milestone
