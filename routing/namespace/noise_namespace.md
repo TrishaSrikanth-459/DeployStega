@@ -201,7 +201,7 @@ https://github.com/{owner}/{repo}/tree/{branch}
 
 ---
 
-## Interaction Class: Actions
+## Interaction Class: Actions_Benign
 
 ### Description
 Actions model **inspection of available GitHub Actions workflows and templates** within a repository.  
