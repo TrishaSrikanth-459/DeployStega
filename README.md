@@ -29,6 +29,12 @@ git clone https://github.com//DeployStega.git
 cd DeployStega
 ```
 
+#### Create and Activate a Virtual Environment
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
 ### 2. Prepare the Experiment Manifest
 
 Create or edit:
