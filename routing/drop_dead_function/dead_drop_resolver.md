@@ -31,8 +31,8 @@ The following items **are shared out of band**:
 
 - the **repository snapshot**,
 - the **dead-drop resolver algorithm**,
-- the **steganographic encoding algorithm** (to the sender),
-- the **steganographic decoding key** (to the receiver),
+- the **steganographic encoding algorithm** (sender only),
+- the **steganographic decoding key** (receiver only),
 - the **epoch definition**, including:
   - epoch duration,
   - a **fixed epoch origin time `T₀`**,
@@ -45,8 +45,8 @@ The following items are **not shared out of band**:
 - which artifacts carry payloads,
 - whether any given epoch contains a payload at all.
 
-DeployStega does **not** attempt to conceal out-of-band setup assumptions.  
-These are assumed to be exchanged privately and are **outside the threat model**.
+DeployStega does **not** attempt to conceal these setup assumptions.  
+They are exchanged privately and are **explicitly outside the threat model**.
 
 ---
 
@@ -64,28 +64,45 @@ where:
 - **`epoch_duration_seconds`** is fixed for the experiment,
 - **`current_unix_time`** is obtained locally at runtime.
 
-Epochs are **indices, not events**.
+Epochs are **indices, not events**:
 
 - They do not imply that a sender posted.
 - They do not imply that a receiver read.
 - They exist solely to parameterize deterministic resolution.
 
 Epoch counting begins at the fixed origin time `T₀`.  
-Running any script does **not** reset epoch counting.
+Running any script does **not** reset epoch indices.
 
 ---
 
-### Mandatory Epoch Participation
+## Mandatory Epoch Participation (Capture Guarantee)
 
-For the duration of the experiment:
+For the duration of the experiment, **epoch participation is mandatory**.
 
-- **Every url outputted at every epoch is evaluated by both sender and receiver**.
-- If the feasibility region yields **no admissible URL** for a role at epoch `t`,
+The protocol enforces the following rules:
+
+- **For every epoch `t`, the resolver is evaluated by both sender and receiver.**
+- If the feasibility region yields **no admissible URL** for a given role at epoch `t`,
   that role performs **no routing action** for that epoch.
 - Otherwise, the role performs **exactly one interaction attempt** derived from the resolver output.
 
-Participants do **not** choose which epochs to visit; they are required to follow the resolver's instructions exactly. 
-Further, participants are not allowed to visit any urls associated with the GitHub repo outside the provided urls for that epoch.
+Participants **do not choose** which epochs to visit; they **must** follow the resolver’s output exactly.
+Participants are **explicitly forbidden** from visiting any repository URLs outside those produced by the resolver for the current epoch.
+
+### Capture Guarantee (Conditional)
+
+Under these rules, DeployStega guarantees:
+
+> **If the sender embeds a payload in epoch `t`, and both sender and receiver correctly execute all resolver-directed actions for every epoch in their session, then the receiver will observe and decode that payload.**
+
+This guarantee holds provided that:
+
+- the artifact persists,
+- GitHub access succeeds,
+- the feasibility region correctly enforces sender-before-receiver ordering.
+- steganographic decoding is successful
+
+No probabilistic inspection or missed-epoch recovery is required under correct participation.
 
 ---
 
@@ -111,7 +128,7 @@ Therefore:
 - artifact classes with zero valid identifiers are excluded,
 - placeholder identifiers (e.g., `"unknown"`) are forbidden.
 
-If the resolver outputs a URL, that URL is **guaranteed valid on GitHub**.
+If the resolver outputs a URL, that URL is **guaranteed valid on GitHub** at snapshot time.
 
 ---
 
@@ -123,7 +140,12 @@ The behavioral feasibility region constrains admissible tuples of the form:
 
 The resolver **never emits URLs outside this region**.
 
-The feasibility region will take into account the timing between the sender's edits and the receiver's capture to minimize detectability. 
+The feasibility region additionally enforces **temporal ordering constraints**, including:
+
+- minimum delay between sender mutation and receiver observation,
+- receiver-side access latency consistent with benign behavior.
+
+These constraints ensure that the receiver **never attempts to read an artifact while it is being mutated**, eliminating race conditions and missed observations.
 
 ---
 
@@ -142,7 +164,7 @@ No other runtime input or communication occurs.
 
 ## Resolver Outputs
 
-For each `(t, role)`, the resolver outputs exactly one triple:
+For each `(t, role)`, the resolver outputs **at most one** triple:
 
 (artifactClass, identifierTuple, URL_role)
 
@@ -151,6 +173,8 @@ All outputs are:
 - snapshot-valid,
 - behaviorally feasible,
 - deterministic.
+
+If no feasible URL exists for `(t, role)`, the resolver outputs **no action**.
 
 ---
 
@@ -173,72 +197,44 @@ It indexes only into snapshot-defined artifacts.
 - They resolve it to **different URLs**:
   - sender → mutation-capable surface,
   - receiver → observation-only surface.
-- Exactly one URL is returned per epoch per role.
+- At most one URL is returned per epoch per role.
 
-The receiver never resolves mutation-capable URLs.  
-The sender may resolve observation-only URLs but performs no mutation on them.
-
----
-
-## Sender–Receiver Temporal Ordering (Explicit)
-
-DeployStega enforces the following ordering constraint:
-
-- **Sender interactions occur before receiver observations** for the same epoch-resolved artifact.
-- The receiver does **not** attempt to read an artifact concurrently with the sender’s mutation.
-
-The minimum delay between sender mutation and receiver observation is governed by the behavioral feasibility region and reflects empirically observed benign retrieval latencies.
-
-If required, receiver observation may occur **later within the same epoch or in a subsequent epoch window**, provided it remains feasible.
+The receiver **never** resolves mutation-capable URLs.  
+The sender **may** resolve observation-only URLs but performs no mutation on them.
 
 ---
 
-## Receiver-Side Verification Without Coordination
+## Sender–Receiver Temporal Ordering (Enforced)
 
-DeployStega provides **verifiable rendezvous candidates**, not delivery guarantees.
+DeployStega enforces strict ordering:
 
-### Decode-or-Discard Rule
+- **Sender mutation precedes receiver observation** for any artifact resolved in the same epoch.
+- Receiver access is delayed by a feasibility-governed minimum latency.
+
+Receiver access may occur:
+
+- later within the same epoch, or
+- in a subsequent epoch window,
+
+provided feasibility constraints are satisfied.
+
+---
+
+## Receiver-Side Verification
+
+DeployStega provides **deterministic rendezvous with guaranteed observation**, not best-effort polling.
+
+### Decode Rule
 
 For each resolved artifact:
 
-1. The receiver accesses the artifact via `URL_receiver`.
-2. The receiver extracts candidate content.
+1. The receiver accesses `URL_receiver`.
+2. The receiver scans all candidate content.
 3. The receiver attempts steganographic decoding.
-4. If decoding fails, the artifact is treated as benign.
-5. If decoding succeeds, the payload is accepted.
+4. If decoding succeeds, the payload is accepted.
+5. If decoding fails, the artifact is benign.
 
-No acknowledgments, retries, or feedback occur.
-
----
-
-## Receiver Epoch Inspection Window
-
-At logical time `T`, the receiver inspects epochs:
-
-t ∈ [T − W, T]
-
-where:
-
-- `W` is fixed for the experiment,
-- each epoch yields at most one observation URL,
-- epochs outside the window are never inspected.
-
-The receiver terminates inspection upon the **first successful decode**.
-
----
-
-## Eventual Observability (Conditional)
-
-DeployStega does **not** guarantee delivery.
-
-It guarantees **eventual observability under a bounded search policy**, provided that:
-
-- the sender performs a valid mutation in some epoch,
-- the artifact persists,
-- the receiver inspects that epoch within its window,
-- decoding succeeds.
-
-This is a **bounded search problem**, not a messaging protocol.
+No acknowledgments, retries, or signaling occur.
 
 ---
 
@@ -254,27 +250,13 @@ This is a **bounded search problem**, not a messaging protocol.
 ### Experiment Phase
 
 **Sender (independent):**
-- resolves `(artifact, URL_sender)` for each epoch
-- mutates artifact at a feasibility-permitted time
+- resolves `(artifact, URL_sender)` for every epoch
+- mutates artifact when and only when instructed
 
 **Receiver (independent):**
-- resolves `(artifact, URL_receiver)` for epochs in `[T − W, T]`
-- inspects artifacts
-- stops upon successful decode
-
----
-
-## Receiver-Side Comment Scanning (Design Clarification)
-
-For comment-bearing artifact classes, the resolver routes to the **container-level URL** (issue, pull request, or commit page).
-
-Consequently:
-
-- The sender mutates **one specific comment**.
-- The receiver scans **all visible comments** and applies decoding.
-- This ambiguity is intentional and reflects GitHub’s UI constraints.
-
-Receiver-side scanning is a **bounded search cost traded for stealth**, not a routing defect.
+- resolves `(artifact, URL_receiver)` for every epoch
+- observes artifacts as instructed
+- decodes deterministically
 
 ---
 
@@ -285,20 +267,27 @@ Receiver-side scanning is a **bounded search cost traded for stealth**, not a ro
 - Fixed snapshot.
 - Fixed epoch origin `T₀`.
 - Accurate feasibility region.
-- Sender and receiver are collaborators.
-- Private out-of-band setup.
+- Mandatory epoch participation.
+- No platform failures.
 
 ### Limitations
 
-- No delivery guarantees.
-- No repository evolution handling.
-- No adversarial interference modeling.
-- No traffic shaping beyond feasibility constraints.
+- No protection against endpoint compromise.
+- No handling of snapshot-invalidating repository changes.
+- No adversarial interference modeling beyond logs.
 
 ---
 
 ## Summary
 
-DeployStega’s deterministic dead-drop resolver enforces **structure without coordination**.
+DeployStega’s deterministic dead-drop resolver provides **guaranteed capture under mandatory participation**.
 
-By mandating epoch participation, enforcing sender-before-receiver ordering, and delegating plausibility to a feasibility region, the resolver enables **verifiable covert rendezvous** suitable for rigorous detectability analysis — not messaging guarantees.
+By enforcing:
+- deterministic epoch resolution,
+- mandatory per-epoch interaction,
+- strict sender-before-receiver ordering, and
+- feasibility-constrained timing,
+
+the system guarantees that **every payload embedded by the sender is observed by the receiver**, so long as both parties follow the protocol exactly.
+
+The resolver provides **structure and certainty**, not reliability heuristics or messaging semantics, enabling rigorous and unambiguous detectability analysis.
