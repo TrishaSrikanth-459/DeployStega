@@ -49,6 +49,7 @@ Required fields:
 - `participants.sender.id`
 - `participants.receiver.id`
 - `epoch.origin_time_utc`
+- `epoch.end_time_utc`
 - `epoch.duration_seconds`
 - `epoch.inspection_window`
 
@@ -70,11 +71,15 @@ Required fields:
 
   "epoch": {
     "origin_unix": 1735689600,
+    "end_unix": 1735696800,
     "duration_seconds": 180,
     "window_size": 20
   }
 }
 ```
+
+The fixed `end_unix` value defines the **termination of the covert communication session**.
+No resolver output is considered valid outside the interval `[origin_unix, end_unix)`.
 
 ### 3. Bootstrap Participant IDs (Once)
 
