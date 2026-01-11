@@ -1,4 +1,4 @@
-# Security Scope and Adversary Model (DeployStega)
+## Security Scope and Adversary Model (DeployStega)
 
 This section formally delineates **the security properties evaluated by DeployStega**, **those explicitly excluded from consideration**, and **the precise adversarial observation capabilities assumed throughout the experimental pipeline**. These distinctions are essential for interpreting empirical results correctly and for avoiding category errors between *covert-communication security* and *implementation-level program security*.
 
@@ -49,7 +49,10 @@ DeployStega assumes, for the duration of each experiment:
 
 If endpoint compromise occurs, the experimental threat model is **violated**, and the resulting data are no longer meaningful for evaluating covert communication. This limitation is not a design flaw but a necessary boundary: endpoint-level compromise would trivially defeat any text-based steganographic scheme and render the problem ill-posed.
 
-Consequently, DeployStega provides only minimal implementation hygiene (e.g., no unnecessary secret exposure, no background services) and makes **no claims of resistance to endpoint-level attacks**.
+Consequently, DeployStega provides only minimal implementation hygiene (e.g., avoiding unnecessary secret exposure and background services) and makes **no claims of resistance to endpoint-level attacks**.
+
+**Credential and configuration handling note.**  
+DeployStega makes **no attempt to cryptographically protect or harden** the `experiment_manifest.json` file or the sender/receiver identifiers once they are placed in the local project directory for execution. These materials are treated as **trusted, out-of-band experimental inputs**. The only enforcement mechanism is a **simple local lockout policy**: after five consecutive invalid identifier entries, the console enforces an increasing time-based lockout (starting at one minute and escalating in fixed steps). This mechanism is intended solely to prevent accidental misuse during experiments, **not** to provide strong authentication or resistance to a determined local adversary.
 
 ---
 
@@ -94,7 +97,7 @@ Although **all routing and benign interaction URLs are restricted to a single re
 
 Restricting the adversary to a single repository would artificially weaken detection by precluding realistic comparative analyses, such as:
 
-- Whether a user’s activity in the covert repository deviates from their activity elsewhere on Github
+- Whether a user’s activity in the covert repository deviates from their activity elsewhere on GitHub
 - Whether the covert repository itself appears anomalous relative to ordinary repository behavior
 
 Such comparisons are well within the capabilities of real-world platform monitoring and must therefore be permitted.
@@ -109,4 +112,4 @@ This represents the **strongest realistic adversary** that preserves the scienti
 
 ## 5. Summary
 
-DeployStega evaluates covert communication security under a GitHub platform–level adversary who can observe all repository interactions, routing patterns, and timing behavior of the sender and receiver accounts across GitHub, but who cannot compromise endpoints or observe off-platform activity. Program-level security is intentionally minimal, as endpoint compromise would trivially defeat steganography and lies outside the experimental threat model. This separation ensures that measured indistinguishability reflects environmental and behavioral plausibility rather than implementation hardening.
+DeployStega evaluates covert communication security under a GitHub platform–level adversary who can observe all repository interactions, routing patterns, and timing behavior of the sender and receiver accounts across GitHub, but who cannot compromise endpoints or observe off-platform activity. Program-level security is intentionally minimal, including unprotected local configuration files and identifiers with only a basic lockout safeguard, because endpoint compromise would trivially defeat steganography and lies outside the experimental threat model. This separation ensures that measured indistinguishability reflects environmental and behavioral plausibility rather than implementation hardening.
