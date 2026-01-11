@@ -36,8 +36,9 @@ The following items **are shared out of band**:
 - the **epoch definition**, including:
   - epoch duration,
   - a **fixed epoch origin time `T₀`**,
+  - a **fixed epoch end time `T_end`** defining the termination of the covert communication session,
   - epoch inspection window size `W`.
-
+    
 The following items are **not shared out of band**:
 
 - the steganographic payload itself,
