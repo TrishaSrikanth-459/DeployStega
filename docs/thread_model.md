@@ -94,14 +94,10 @@ Although **all routing and benign interaction URLs are restricted to a single re
 
 Restricting the adversary to a single repository would artificially weaken detection by precluding realistic comparative analyses, such as:
 
-- Whether a user’s activity in the covert repository deviates from their activity elsewhere
-- Whether the repository itself appears anomalous relative to the user’s global GitHub behavior
+- Whether a user’s activity in the covert repository deviates from their activity elsewhere on Github
+- Whether the covert repository itself appears anomalous relative to ordinary repository behavior
 
 Such comparisons are well within the capabilities of real-world platform monitoring and must therefore be permitted.
-
-### Why Not Global (Off-Platform) Visibility?
-
-Conversely, granting the adversary visibility into all user activity outside GitHub (e.g., web browsing, OS behavior, physical actions) would trivialize covert communication and render the experimental question ill-defined. Such omniscient adversaries are therefore excluded.
 
 ### Adopted Boundary
 
