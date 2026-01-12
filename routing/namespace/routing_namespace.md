@@ -153,7 +153,6 @@ For the duration of each DeployStega experiment, no pending invitations are acce
 
 This assumption ensures that:
 - All observed activity arises solely from the sender and receiver,
-- No third-party comments, reviews, or notifications are introduced,
 - Sender interactions do not elicit social reactions from external collaborators that may that may introduce unmodeled behavioral signals, secondary communication channels, or confounding activity traces. Examples of excluded social reactions include (but are not limited to):
   - A collaborator receiving notifications of a sender-authored comment to their artifact
   - A collaborator replying to, questioning, or expanding upon a sender-authored comment,
@@ -162,7 +161,7 @@ This assumption ensures that:
   - Off-platform communication (e.g., Slack, email) triggered by sender actions,
   - Cascading interaction effects such as additional comments, reviews, or commits prompted by sender edits.
 
-In real-world repositories, external collaborator churn may occur due to organizational or social processes; these events are treated as out-of-scope conditions for the routing model.
+In real-world, business repositories, it is unlikely that the sender, receiver, and adversary remain the only collaborators. Further, external collaborator engagement or reactions may occur due to organizational or social norms. Such events are out-of-scope conditions for the routing model.
 This assumption is necessary to isolate platform-level detectability from uncontrolled social interference and to preserve the interpretability of empirical indistinguishability measurements.
 
 ---
