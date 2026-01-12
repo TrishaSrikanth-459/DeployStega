@@ -26,12 +26,12 @@ export GITHUB_TOKEN=YOUR_TOKEN_HERE
 git clone https://github.com//DeployStega.git
 cd DeployStega
 ```
-#### 2. Create and Activate a Virtual Environment
+### 2. Create and Activate a Virtual Environment
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
-#### 3. Build the Experiment Snapshot (Required, Once)
+### 3. Build the Experiment Snapshot (Required, Once)
 All experiment initialization is performed by:
 ```bash
 python -m scripts.build_snapshot
@@ -45,14 +45,14 @@ During this step, the user is prompted to provide:
 - Epoch origin UNIX time
 - Epoch end UNIX time
 
-#### 4. Timing Constraints (Enforced)
+### 4. Timing Constraints (Enforced)
 - epoch.origin_unix must be at least 5 minutes after snapshot build time
 - epoch.end_unix must be at least 5 minutes after epoch.origin_unix
 - epoch.end_unix must be strictly greater than epoch.origin_unix
 
 Invalid inputs will abort snapshot creation.
 
-#### What build_snapshot.py Does
+#### What build_snapshot.py does:
 This single step:
 - Generates a unique experiment ID
 - Generates opaque sender and receiver IDs
@@ -75,7 +75,7 @@ Receiver ID : <opaque 128-bit hex>
 Do not modify the snapshot or manifest after this step.
 All runtime scripts operate in read-only mode.
 ```
-### 3. Distribute Participant IDs (Out-of-Band)
+### 5. Distribute Participant IDs (Out-of-Band)
 - Sender ID → sender
 - Receiver ID → receiver
 
@@ -84,7 +84,7 @@ These identifiers:
 - Are used only as deterministic PRNG inputs
 - Must remain fixed for the experiment
 
-### 4. Run the Dead-Drop Resolver (Runtime)
+### 6. Run the Dead-Drop Resolver (Runtime)
 Each participant independently runs:
 ```bash
 python -m scripts.interactive_dead_drop
