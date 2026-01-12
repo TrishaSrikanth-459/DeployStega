@@ -19,23 +19,23 @@ It provides *verifiable rendezvous* under strict, explicit assumptions.
 ## Set Your Token
 ```bash
 export GITHUB_TOKEN=YOUR_TOKEN_HERE
-
+```
 ## Step-by-Step Usage
 ### 1. Clone the Repository
 ```bash
 git clone https://github.com//DeployStega.git
 cd DeployStega
-
+```
 #### 2. Create and Activate a Virtual Environment
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-
+```
 #### 3. Build the Experiment Snapshot (Required, Once)
 All experiment initialization is performed by:
 ```bash
 python -m scripts.build_snapshot
-
+```
 This step fully initializes the experiment and must be completed before any sender or receiver runtime execution.
 
 During this step, the user is prompted to provide:
@@ -67,14 +67,14 @@ Example Output
 Experiment ID : deploystega-1768098266
 Snapshot      : experiments/snapshot.json
 Manifest      : experiments/experiment_manifest.json
-
+```
 Participant IDs (share privately):
 ```text
 Sender ID   : <opaque 128-bit hex>
 Receiver ID : <opaque 128-bit hex>
 Do not modify the snapshot or manifest after this step.
 All runtime scripts operate in read-only mode.
-
+```
 ### 3. Distribute Participant IDs (Out-of-Band)
 - Sender ID → sender
 - Receiver ID → receiver
@@ -88,7 +88,7 @@ These identifiers:
 Each participant independently runs:
 ```bash
 python -m scripts.interactive_dead_drop
-
+```
 ## Console Flow:
 - Automatic wait until epoch origin (with countdown warning)
 - Select role (sender or receiver)
@@ -125,7 +125,7 @@ The resolver outputs:
 [epoch.origin_unix, epoch.end_unix)
 - A safety countdown is displayed prior to epoch start
 - Execution terminates automatically at epoch end
-
+```
 ## Key Properties
 - Deterministic resolution
 - No runtime coordination
