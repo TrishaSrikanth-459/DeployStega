@@ -21,7 +21,7 @@ We distinguish between two interaction roles:
 - **Receiver**: an account that accesses existing artifacts through
   standard, read-only interactions in order to observe information.
 
-## Initial Permission Assumption (Explicit)
+### Initial Permission Assumption (Explicit)
 At experiment start, **both sender and receiver are assumed to be legitimate,
 non-admin collaborators** on the same repository, with the following minimum
 permissions:
@@ -74,7 +74,7 @@ of the experiment**, and:
 - All sender-side mutations and receiver-side observations are assumed
   to be authorized when attempted, and are further assumed to be
   **identifier-preserving**.
-- **No actor (including the sender, receiver, or any external collaborator)**
+- **No actor (including the sender, receiver, or the adversary)**
   is assumed to perform actions that would change identifier-defining fields
   as specified in this routing namespace.
 
@@ -83,11 +83,11 @@ renames, issue transfers, history rewriting) may occur due to administrative
 decisions or external collaborators. Such events are treated as
 **out-of-scope conditions** for the routing model. If an identifier-changing
 operation were to occur during an experiment, the run would be considered
-**invalidated or aborted**, rather than modeled as a routing failure.
+**invalidated**, rather than modeled as a routing failure.
 
 Permission changes and identifier-changing operations are therefore
 **out of scope** for the routing model and are not treated as part of the
-evaluated threat or failure surface.
+evaluated failure surface.
 
 ---
 
@@ -144,15 +144,12 @@ GraphQL APIs, nor the use of scripted clients.
 
 ---
 
-## Editorial Constraints (Sender)
+## Editorial Constraint (Sender)
 
-- **The sender is explicitly forbidden from editing artifact titles** (e.g., issue titles, pull request titles, release titles, label names).
-  - Title modifications are **high-salience, globally visible changes** that are **conspicuous** relative to routine collaborative behavior.
-  - Such disproportionate visibility is therefore unsuitable for covert signaling.
-- **The sender must not overwrite or alter another contributor’s semantic content.**
-  - The sender may only add comments to another contributor's thread, edit their own comments, or otherwise produce changes that don't materially affect another's work.
+**The sender is explicitly forbidden from editing artifact titles** (e.g., issue titles, pull request titles, release titles, label names).  
+This restriction is imposed because title modifications are **high-salience, globally visible changes** that are **conspicuous** relative to routine collaborative behavior. Such edits introduce disproportionate visibility, rendering them unsuitable for covert signaling under benign-behavior constraints.
 
-These constraints ensure that sender behavior remains **low-salience, contextually plausible, and behaviorally indistinguishable** from ordinary collaborative interactions, preserving the validity of covert-routing detectability analysis.
+Accordingly, all sender-side mutations modeled in this routing namespace are restricted to **non-title content fields** (e.g., bodies, descriptions, comments).
 
 ---
 
@@ -204,12 +201,20 @@ An issue is uniquely identified by the ordered triple
 - repo: The repository name in which the issue exists.
 - issue_number: The repository-scoped numeric identifier assigned to the issue at creation time.
 
+### Addressability (Sender)
+#### Modifies mutable fields of an existing issue
+  - REST API: PATCH /repos/{owner}/{repo}/issues/{issue_number}
+  - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+      - Upon visiting this url, the sender must click the "edit" button on the top right.
+
 ### Addressability (Sender and Receiver)
 #### Access specific issues
   - REST API: GET /repos/{owner}/{repo}/issues/{issue_number}
   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
 
 ### Notes
+- Editing issue fields (body, labels, assignees, lock state, open/closed)
+  does not change the identifier.
 - Identifier-changing operations such as issue transfer or deletion are platform-defined
   but are **assumed not to occur** within the experimental scope.
 
@@ -234,12 +239,20 @@ A pull request is uniquely identified by the ordered tuple
 - repo: The repository name containing the pull request.
 - pull_number: The repository-scoped numeric identifier assigned when the pull request is created.
 
+### Addressability (Sender) 
+#### Modifies mutable pull request fields
+   - REST API: PATCH /repos/{owner}/{repo}/pulls/{pull_number}
+   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
+       - Upon visiting the URL, the sender must or click "..." and then "Edit" near the top right of the pull request's body to edit the body.
+
 ### Addressability (Sender and Receiver)
 #### View an existing pull request. 
    - REST API: GET /repos/{owner}/{repo}/pulls/{pull_number}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}
 
 ### Notes
+- Pull request edits, state transitions (draft/open/closed/merged),
+  and branch updates do not alter the identifier.
 - Identifier-changing operations such as repository rename, transfer,
   or pull request deletion are platform-defined but **assumed not to occur**
   during experiments.
@@ -272,6 +285,7 @@ A commit is uniquely identified by the ordered tuple
    - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
 
 ### Notes
+- Branch movement, rebasing, or pull request association do not alter the commit identifier.
 - Identifier-changing operations such as repository deletion or history rewriting
   are **assumed not to occur** within the experimental scope.
 
@@ -297,19 +311,23 @@ An issue comment is uniquely identified by the ordered tuple
    - REST API: POST /repos/{owner}/{repo}/issues/{issue_number}/comments
    - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
        - Sender must enter the comment's content in the text box under "Add a comment" and subsequently click "comment" to save their changes.
+#### Edit an existing issue comment
+   - REST API: PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
+   - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
+       - Sender must click "..." near the top-right of the comment's textbox, click "Edit," enter the comment's content, and finally, click "Update comment."
          
 ### Addressability (Sender and Receiver) 
-#### Access issue comments
+#### Access specified issue comments
    - REST API: GET /repos/{owner}/{repo}/issues/{issue_number}/comments
    - Web URL: https://github.com/{owner}/{repo}/issues/{issue_number}
-       - Reciever must attempt to decode all visible comments until an intelligible message is captured.
+       - Reciever must scroll down to the desired comment under the specified issue.
 
 ### Notes
-- Comment creation does not change the identifier.
+- Comment creation, editing, or deletion does not change the identifier.
 - Identifier-changing operations such as issue transfer or deletion are
   platform-defined but **assumed not to occur** during the experiment.
 
---- 
+---
 
 ## Artifact Class: PullRequestComment
 
@@ -335,15 +353,19 @@ A pull request comment is uniquely identified by the ordered tuple
    - REST API: POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
        - Sender must enter the reply's comments in the textbox underneath the comment they wish to reply to, and finally, click "Add review comment."
+#### Edit an existing pull request review comment
+   - REST API: PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}
+   - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
+       - Sender must click "..." near the top right of the text box of the comment, click "Edit," enter the desired edits in the newly appeared text box, and finally, click "Update comment."
          
 ### Addressability (Sender and Receiver)
 #### Access specified pull request review comments
    - REST API: GET /repos/{owner}/{repo}/pulls/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/pull/{pull_number}/files
-       - Reciever must attempt to decode all visible comments until an intelligible message is captured.
+       - Reciever must scroll down to the desired comment to the left of this page.
 
 ### Notes
-- Comment creation does not alter the identifier.
+- Comment creation, editing, or deletion does not alter the identifier.
 - Identifier-changing operations such as pull request deletion or repository
   transfer are **assumed not to occur** within scope.
 
@@ -369,15 +391,19 @@ A commit comment is uniquely identified by the ordered tuple
   - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
       - Sender must scroll to the bottom of the commit page (or to a specific line in the diff view),
         enter comment text into the comment input box, and click **“Comment”**.
+#### Edit an existing commit comment
+   - REST API: PATCH /repos/{owner}/{repo}/comments/{comment_id}
+   - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
+       - Sender must click "..." near the top right of the comment's text box, click "Edit," enter the desired edits, and finally, click "Update comment." They may do so for either a general comment or a line-specific comment.
          
 ### Addressability (Sender and Receiver)
 #### Access specified commit comments
    - REST API: GET /repos/{owner}/{repo}/comments/{comment_id}
    - Web URL: https://github.com/{owner}/{repo}/commit/{commit_sha}
-       - Reciever must attempt to decode all visible comments until an intelligible message is captured.
+       - Receiver must scroll down to the desired comment on the page.
 
 ### Notes
-- Comment creation does not alter the identifier.
+- Comment editing does not alter the identifier.
 - Identifier-changing operations such as repository transfer are
   **assumed not to occur** within the experimental scope.
 
@@ -399,12 +425,18 @@ A release is a user-curated wrapper around a tag that presents a specific reposi
 A GitTag is uniquely identified by the ordered tuple
 (owner, repo, tag).
 
+### Addressability (Sender)
+#### Edit an existing tag's description or associated assets
+   - URL: https://github.com/{owner}/{repo}/releases/tag/{tag}
+       - Sender may edit the description as weell as upload relevant files before finally clicking "update release." 
+
 ### Addressability (Sender and Receiver)
 #### View the title, description, and assets associated with a specific tag
   - REST API: get /repos/{owner}/{repo}/git/tags/{tag_sha}
   - URL: https://github.com/{owner}/{repo}/releases/tag/{tag}
 
 ### Notes
+- Tag editing does not alter the identifier.
 - Identifier-changing operations such as the creation of new tags or the deletion of existing tags are
   **assumed not to occur** within the experimental scope.
 
@@ -424,6 +456,12 @@ Labels are **named, repository-defined identifiers** used to categorize and orga
 A Label is uniquely identified by the ordered tuple
 (owner, repo, label_name).
 
+### Addressability (Sender)
+#### Edit a particular label
+  - REST API: patch /repos/{owner}/{repo}/labels/{name}
+  - URL: https://github.com/{owner}/{repo}/labels
+    - Scroll down to the particular label, click "...," click "edit," update the "Description" as desired, and finally, click "Save changes."
+
 ### Addressability (Sender and Receiver)
 #### View a specific label
   - REST API: get /repos/{owner}/{repo}/labels/{name}
@@ -431,6 +469,7 @@ A Label is uniquely identified by the ordered tuple
     - If the label name includes spaces, replace them with "%20" 
 
 ### Notes
+- Creating or deleting labels constitute **snapshot-mutating actions** and are therefore out of scope.
 - More query filtering and/or sorting, with the exception of querying for specific labels, are considered **presentation-layer variations**.
 
  ---
@@ -448,6 +487,12 @@ A milestone is a **named planning artifact** used to group issues and pull reque
 ### Identifier Construction Rule
 A Milestone is uniquely identified by the ordered tuple
 (owner, repo, milestone_number).
+
+### Addressability (Sender)
+#### Update milestone metadata (description, due date, state)
+  - REST API: patch/repos/{owner}/{repo}/milestones/{milestone_number}
+  - URL: https://github.com/{owner}/{repo}/milestones/{milestone_number}/edit
+    - Sender may edit the "Due Date (options)" and/or "Description (options)" before, finally, clicking "Save changes." 
 
 ### Addressability (Sender and Receiver)
 #### View a specific milestone
