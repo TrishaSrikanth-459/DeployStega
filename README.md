@@ -48,7 +48,6 @@ During this step, the user is prompted to provide:
 ### 4. Timing Constraints (Enforced)
 - epoch.origin_unix must be at least 5 minutes after snapshot build time
 - epoch.end_unix must be at least 5 minutes after epoch.origin_unix
-- epoch.end_unix must be strictly greater than epoch.origin_unix
 
 Invalid inputs will abort snapshot creation.
 
