@@ -14,183 +14,137 @@ It provides *verifiable rendezvous* under strict, explicit assumptions.
   - For **private repositories**, the token must have access
   - The **sender must be a collaborator** with write permissions
 
-## Set your token
-```bash
-export GITHUB_TOKEN=YOUR_TOKEN_HERE
-```
-
 ---
 
-## Step-by-Step Usage
+## Set Your Token
+```bash
+export GITHUB_TOKEN=YOUR_TOKEN_HERE
 
+## Step-by-Step Usage
 ### 1. Clone the Repository
 ```bash
 git clone https://github.com//DeployStega.git
 cd DeployStega
-```
 
-#### Create and Activate a Virtual Environment
+#### 2. Create and Activate a Virtual Environment
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-```
 
-### 2. Prepare the Experiment Manifest
-
-Create or edit:
+#### 3. Build the Experiment Snapshot (Required, Once)
+All experiment initialization is performed by:
 ```bash
-experiments/experiment_manifest.json
-```
+python -m scripts.build_snapshot
 
-Required fields:
+This step fully initializes the experiment and must be completed before any sender or receiver runtime execution.
 
-- `experiment_id`
-- `snapshot` (path to snapshot JSON)
-- `participants.sender.id`
-- `participants.receiver.id`
-- `epoch.origin_time_utc`
-- `epoch.end_time_utc`
-- `epoch.duration_seconds`
-- `epoch.inspection_window`
+During this step, the user is prompted to provide:
 
-#### Sample `experiment_manifest.json`
-```json
-{
-  "experiment_id": "deploystega-test-001",
+- GitHub repository owner
+- GitHub repository name
+- Epoch origin UNIX time
+- Epoch end UNIX time
 
-  "snapshot": "experiments/snapshot.json",
+#### 4. Timing Constraints (Enforced)
+- epoch.origin_unix must be at least 5 minutes after snapshot build time
+- epoch.end_unix must be at least 5 minutes after epoch.origin_unix
+- epoch.end_unix must be strictly greater than epoch.origin_unix
 
-  "participants": {
-    "sender": {
-      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    "receiver": {
-      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    }
-  },
+Invalid inputs will abort snapshot creation.
 
-  "epoch": {
-    "origin_unix": 1735689600,
-    "end_unix": 1735696800,
-    "duration_seconds": 180,
-    "window_size": 20
-  }
-}
-```
+#### What build_snapshot.py Does
+This single step:
+- Generates a unique experiment ID
+- Generates opaque sender and receiver IDs
+- Enumerates all real, addressable GitHub artifacts
+- Freezes them into a routing-only snapshot
+- Writes both:
+  - experiments/snapshot.json
+  - experiments/experiment_manifest.json
 
-The fixed `end_unix` value defines the **termination of the covert communication session**.
-No resolver output is considered valid outside the interval `[origin_unix, end_unix)`.
+Example Output
+```text
+Experiment ID : deploystega-1768098266
+Snapshot      : experiments/snapshot.json
+Manifest      : experiments/experiment_manifest.json
 
-### 3. Bootstrap Participant IDs (Once)
+Participant IDs (share privately):
+```text
+Sender ID   : <opaque 128-bit hex>
+Receiver ID : <opaque 128-bit hex>
+Do not modify the snapshot or manifest after this step.
+All runtime scripts operate in read-only mode.
 
-Generate fresh opaque session identifiers:
-```bash
-python -m scripts.bootstrap_experiment
-```
-
-This will populate:
-
-- `participants.sender.id`
-- `participants.receiver.id`
-
-### 4. Distribute
-
+### 3. Distribute Participant IDs (Out-of-Band)
 - Sender ID → sender
 - Receiver ID → receiver
 
-### 5. Build the Repository Snapshot (Once)
+These identifiers:
+- Are not cryptographic keys
+- Are used only as deterministic PRNG inputs
+- Must remain fixed for the experiment
 
-Enumerate real, addressable GitHub artifacts and freeze them into a snapshot:
-```bash
-python -m scripts.build_snapshot
-```
-
-This step:
-
-- Uses the GitHub REST API
-- Emits only schema-valid, concrete identifiers
-- Rejects placeholders (e.g., "unknown")
-- Writes the snapshot to the path specified in the manifest
-
-⚠️ **No enumeration or API calls occur after this step.**
-
-### 6. Run the Dead-Drop Resolver (Runtime)
-
+### 4. Run the Dead-Drop Resolver (Runtime)
 Each participant independently runs:
 ```bash
 python -m scripts.interactive_dead_drop
-```
 
-Inside the console:
-
-- Confirm collaborator/write-access requirement
+## Console Flow:
+- Automatic wait until epoch origin (with countdown warning)
 - Select role (sender or receiver)
-- Enter your role-specific ID
-- Enter an epoch index (integer)
+- Enter role-specific ID
+- Resolver executes automatically per epoch
 
 The resolver outputs:
-
 - Artifact class
 - Identifier tuple
 - Exactly one role-appropriate GitHub URL
 - Exactly one action sequence
 
-#### Sender Workflow
-
-1. Run the resolver as sender
+## Sender Workflow
+1. Wait for epoch start
 2. Open the resolved URL
-3. Perform the instructed mutation (edit, create, comment, etc.)
-4. Exit — no signaling, acknowledgments, or retries
+3. Perform the instructed mutation (edit, comment, etc.)
+4. Do not signal or retry
 
-#### Receiver Workflow
-
-1. Run the resolver as receiver
+## Receiver Workflow
+1. Wait for epoch start
 2. Open the resolved URL
 3. Attempt steganographic decoding
 4. Apply decode-or-discard:
-   - Decode fails → treat artifact as benign
-   - Decode succeeds → accept message
-5. Optionally inspect previous epochs within the experiment's window
+  - Decode fails → treat artifact as benign
+  - Decode succeeds → accept message
+5. Inspect prior epochs within the inspection window if needed
 
----
+## Epoch Model
+- Epochs are logical indices, not events
+- Epoch counting is fixed relative to epoch.origin_unix
+- Running scripts does not reset epoch state
+- Resolver outputs are valid only within:
+```text
+[epoch.origin_unix, epoch.end_unix)
+- A safety countdown is displayed prior to epoch start
+- Execution terminates automatically at epoch end
 
 ## Key Properties
-
 - Deterministic resolution
 - No runtime coordination
 - No live network queries
 - No invalid or placeholder URLs
-- Snapshot-valid, schema-conformant identifiers only
+- Snapshot-valid identifiers only
 - Verifiable rendezvous, not guaranteed delivery
 
----
-
-## Epoch Model
-
-- Epochs are logical indices, not synchronized events
-- Epoch definition is agreed out-of-band
-- Receiver may inspect epochs within a bounded window `[T − W, T]`
-- Clock drift is tolerated via window size
-
----
-
 ## Research Scope
-
 DeployStega is intended for:
-
 - Detectability analysis
 - Behavioral plausibility evaluation
 - Controlled covert-routing experiments
-
-It is **not** intended for:
-
+It is not intended for:
 - Production deployment
 - Guaranteed message delivery
 - Real-time communication
-
----
+- Endpoint security evaluation
 
 ## License
-
-Research use only.  
-See `LICENSE` for details.
+Research use only.
+See LICENSE for details.
