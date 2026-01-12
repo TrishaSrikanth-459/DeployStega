@@ -143,6 +143,29 @@ The model does not assume programmatic access via the GitHub REST or
 GraphQL APIs, nor the use of scripted clients.
 
 ---
+## Experimental Assumption (Collaborator Stability)
+
+For the duration of each DeployStega experiment, no pending invitations are accepted mid-experiment, and
+**the only collaborators present throughout the experiment are:**
+- the sender,
+- the receiver, and
+- the adversary.
+
+This assumption ensures that:
+- All observed activity arises solely from the sender and receiver,
+- No third-party comments, reviews, or notifications are introduced,
+- Sender interactions do not elicit social reactions from external collaborators that may that may introduce unmodeled behavioral signals, secondary communication channels, or confounding activity traces. Examples of excluded social reactions include (but are not limited to):
+  - A collaborator receiving notifications of a sender-authored comment to their artifact
+  - A collaborator replying to, questioning, or expanding upon a sender-authored comment,
+  - A collaborator editing, correcting, or rephrasing sender-authored content,
+  - A collaborator referencing sender activity in a follow-up issue, pull request, or review,
+  - Off-platform communication (e.g., Slack, email) triggered by sender actions,
+  - Cascading interaction effects such as additional comments, reviews, or commits prompted by sender edits.
+
+In real-world repositories, external collaborator churn may occur due to organizational or social processes; these events are treated as out-of-scope conditions for the routing model.
+This assumption is necessary to isolate platform-level detectability from uncontrolled social interference and to preserve the interpretability of empirical indistinguishability measurements.
+
+---
 
 ## Editorial Constraint (Sender)
 
