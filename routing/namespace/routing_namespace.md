@@ -28,11 +28,11 @@ permissions:
 
 - **Sender permissions (write-level collaborator)**  
   The sender has sufficient permissions to:
-  - create and edit issues
-  - open and edit pull requests
-  - create commits via the GitHub web interface
-  - create, edit, and delete issue comments, pull request review comments,
-    and commit comments
+  - create and edit issue comments
+  - Create and edit pull request comments
+  - create and edit commit comments
+  - view issues, pull requests, commits, and associated comments
+    via standard web URLs   
   - etc.
 
   The sender is **not** assumed to have repository administrator,
@@ -146,10 +146,7 @@ GraphQL APIs, nor the use of scripted clients.
 ## Experimental Assumption (Collaborator Stability)
 
 For the duration of each DeployStega experiment, no pending invitations are accepted mid-experiment, and
-**the only collaborators present throughout the experiment are:**
-- the sender,
-- the receiver, and
-- the adversary.
+**the only collaborators present throughout the experiment are** the sender and the receiver. 
 
 This assumption ensures that:
 - All observed activity arises solely from the sender and receiver,
