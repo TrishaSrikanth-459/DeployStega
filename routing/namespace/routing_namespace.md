@@ -158,7 +158,7 @@ This assumption ensures that:
   - Off-platform communication (e.g., Slack, email) triggered by sender actions,
   - Cascading interaction effects such as additional comments, reviews, or commits prompted by sender edits.
 
-In real-world, business repositories, it is unlikely that the sender, receiver, and adversary remain the only collaborators. Further, external collaborator engagement or reactions may occur due to organizational or social norms. Such events are out-of-scope conditions for the routing model.
+In real-world, business repositories, it is unlikely that the sender and receiver. Further, external collaborator engagement or reactions may occur due to organizational or social norms. Such events are out-of-scope conditions for the routing model.
 This assumption is necessary to isolate platform-level detectability from uncontrolled social interference and to preserve the interpretability of empirical indistinguishability measurements.
 
 ---
