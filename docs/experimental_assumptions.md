@@ -215,24 +215,6 @@ In real-world repositories, collaborator churn and social engagement may occur d
 
 ---
 
-## Adversary Role Clarification
-
-The adversary is **not modeled as a repository collaborator** and does not participate in repository interactions.  
-Instead, the adversary is modeled as a **security monitoring entity** with access to centralized platform logs, metadata, and aggregate statistics consistent with realistic enterprise monitoring capabilities.
-
-The adversary:
-- observes semantic, behavioral, and routing features extracted from logs,
-- does not generate content, comments, or reactions,
-- does not influence repository state during the experiment.
-
-Crucially, DeployStega **does not model an active adversary who tampers with the covert communication channel itself** (e.g., by editing artifacts, injecting misleading content, deleting messages, or otherwise interfering with sender–receiver interactions).  
-Such an adversary would trivially defeat any application-layer steganographic scheme by disrupting or corrupting the carrier artifacts, rendering detectability analysis ill-posed.
-
-By restricting the adversary to **passive observation of platform-level logs**, DeployStega isolates the core research question:  
-whether covert communication can remain statistically indistinguishable from benign activity **under realistic security monitoring**, rather than under channel sabotage.
-
----
-
 ## Detectability of Repository Population Characteristics
 
 **Throughout all DeployStega experiments, the sender and the receiver are the only repository collaborators.**  
