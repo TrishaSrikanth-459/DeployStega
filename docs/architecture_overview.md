@@ -137,33 +137,80 @@ Defines `FeatureExtractionPipeline`:
 ## Experiments and Scripts
 
 ### `experiments/`
-Contains experiment configuration artifacts:
-- `experiment_manifest.json`
-- snapshot definitions
+
+Contains **experiment configuration artifacts** that define *what* an experiment is, independent of execution.
+
+- **`experiment_manifest.json`**  
+  Canonical, immutable configuration for a DeployStega experiment run.  
+  Defines:
+  - experiment identifier
+  - epoch schedule
+  - sender / receiver roles
+  - routing mode and parameters
+  - pointer to the repository snapshot to use  
+  This file is read by orchestration scripts and is never mutated at runtime.
+
+- **`snapshot.json`** (or snapshot definition files)  
+  Represents a **frozen view of the repository state** used during the experiment.  
+  Enumerates all snapshot-valid artifacts (issues, comments, commits, etc.) so that:
+  - dead-drop resolution only targets existing artifacts
+  - routing is deterministic and reproducible
+  - no artifact creation occurs during the experiment  
+  Treated as immutable background context.
 
 ---
 
 ### `scripts/`
-Contains orchestration utilities:
-- snapshot builders
-- trace template generators
-- experiment context setup
+
+Contains **orchestration and setup utilities** used to construct experiment inputs.
+
+- **`build_snapshot.py`**  
+  Builds a repository snapshot used for routing.  
+  Responsible for:
+  - querying repository metadata
+  - enumerating snapshot-valid artifacts
+  - validating epoch origin / end times
+  - writing snapshot files used by the resolver
+
+- **`interactive_dead_drop.py`**  
+  Interactive console tool for executing dead-drop routing logic.  
+  Responsible for:
+  - resolving deterministic dead-drop URLs per epoch
+  - enforcing feasibility-region constraints
+  - handling epoch countdowns and termination
+  - producing routing traces for inspection
+
+- **`experiment_context.py`**  
+  Loads and validates experiment configuration at runtime.  
+  Responsible for:
+  - reading `experiment_manifest.json`
+  - wiring together snapshot, routing, and feasibility components
+  - exposing a unified context object to orchestration code
 
 ---
 
-## Tests (`tests/`)
+### `tests/`
 
-Tests are organized by subsystem:
-- dataset immutability
-- routing determinism
-- feasibility enforcement
-- feature extraction stability
+Contains **subsystem-level tests** enforcing correctness and invariants.
 
-The test suite enforces:
-- determinism
-- immutability
-- role symmetry
-- feasibility correctness
+Tests are organized around:
+
+- **Dataset immutability**
+  - `BenignDataset`, `NeighboringDataset`, and `InteractionTrace` immutability
+  - replacement correctness for neighboring datasets
+
+- **Routing determinism**
+  - dead-drop resolver stability
+  - deterministic URL resolution given fixed seeds and epochs
+
+- **Feasibility enforcement**
+  - URL-level allow/deny behavior
+  - correct handling of infeasible epochs
+
+- **Feature extraction stability**
+  - extractor determinism
+  - invariance under dataset ordering
+  - consistency across benign vs neighboring datasets
 
 ---
 
