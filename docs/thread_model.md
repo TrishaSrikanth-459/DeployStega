@@ -85,7 +85,7 @@ The adversary is **explicitly not assumed** to have access to:
 - Activity in other applications (e.g., email, messaging platforms)
 - Physical surveillance, coercion, or social engineering
 
-To that end, DeployStega does **not** model an adversary who has already singled out the sender or receiver as suspicious and performs persistent, individualized monitoring of their activity.The adversary considered in our work operates at the **population level**.
+To that end, DeployStega does **not** model an adversary who has already singled out the sender or receiver as suspicious and performs persistent, individualized monitoring of their activity. The adversary considered in our work operates at the **population level**.
 
 ---
 
