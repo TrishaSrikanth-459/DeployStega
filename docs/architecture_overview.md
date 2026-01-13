@@ -62,7 +62,7 @@ Critically:
 
 ---
 
-### routing_trace_record.py
+### `routing_trace_record.py`
 
 Defines the canonical representation of a single routing action.
 
@@ -84,7 +84,7 @@ This module performs no interpretation and no aggregation. It exists solely to e
 
 ---
 
-### routing_trace_to_interaction.py
+### `routing_trace_to_interaction.py`
 
 Converts routing records into log-level interaction objects.
 
@@ -102,7 +102,7 @@ This file is the only place where routing output becomes adversary-observable lo
 
 ---
 
-### build_neighboring_dataset_from_routing.py
+### `build_neighboring_dataset_from_routing.py`
 
 Bridges routing traces into the DP-style dataset abstraction.
 
