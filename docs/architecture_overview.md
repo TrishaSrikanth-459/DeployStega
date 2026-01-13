@@ -62,6 +62,64 @@ Critically:
 
 ---
 
+### routing_trace_record.py
+
+Defines the canonical representation of a single routing action.
+
+A `RoutingTraceRecord` corresponds to one resolver decision as it would appear in logs:
+- role (`sender` or `receiver`)
+- epoch index
+- artifact class
+- artifact identifier tuple
+- concrete GitHub URL
+- optional timestamp and metadata
+
+#### Responsibilities:
+- Parse routing traces from JSONL
+- Validate required fields
+- Normalize identifiers into immutable tuples
+- Preserve exact URL strings
+
+This module performs no interpretation and no aggregation. It exists solely to establish a stable, typed boundary between routing output and dataset construction.
+
+---
+
+### routing_trace_to_interaction.py
+
+Converts routing records into log-level interaction objects.
+
+#### Responsibilities:
+- Map each `RoutingTraceRecord` → `InteractionEvent`
+- Encode artifact identity in a stable, extractor-friendly format
+- Attach routing metadata (URL, epoch, role) immutably
+- Group events by user (typically `sender` vs. `receiver`)
+- Construct `InteractionTrace` objects
+
+If routing traces lack timestamps, this module can:
+- Deterministically synthesize timestamps from epoch structure (pure scaffolding, not behavioral modeling)
+
+This file is the only place where routing output becomes adversary-observable log events.
+
+---
+
+### build_neighboring_dataset_from_routing.py
+
+Bridges routing traces into the DP-style dataset abstraction.
+
+## Responsibilities:
+- Convert routing trace JSONL → `InteractionTrace`s
+- Assemble a `BenignDataset` from existing traces
+- Construct a `NeighboringDataset` by replacing exactly k user traces
+- Enforce:
+  - immutability
+  - index validity
+  - exact-k replacement semantics
+
+### This module ensures:
+- Dataset size is unchanged
+- Only per-user traces differ between D and D′
+- Feature extractors remain dataset-agnostic
+
 ## Routing and Feasibility (`routing/`)
 
 The `routing` package defines **how sender and receiver interact with platform artifacts** while preserving identifier stability and behavioral plausibility.
