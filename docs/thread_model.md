@@ -89,6 +89,23 @@ Including such capabilities would trivialize detection and invalidate the scient
 
 ---
 
+### 3.3 Adversary Role Clarification
+
+The adversary is **not modeled as a repository collaborator** and does not participate in repository interactions.  
+
+The adversary:
+- observes semantic, behavioral, and routing features extracted from logs,
+- does not generate content, comments, or reactions,
+- does not influence repository state during the experiment.
+
+Crucially, DeployStega **does not model an active adversary who tampers with the covert communication channel itself** (e.g., by editing artifacts, injecting misleading content, deleting messages, or otherwise interfering with sender–receiver interactions).  
+Such an adversary would trivially defeat any application-layer steganographic scheme by disrupting or corrupting the carrier artifacts, rendering detectability analysis ill-posed.
+
+By restricting the adversary to **passive observation of platform-level logs**, DeployStega isolates the core research question:  
+whether covert communication can remain statistically indistinguishable from benign activity **under realistic security monitoring**, rather than under channel sabotage.
+
+---
+
 ## 4. Repository Scope vs. Platform Scope
 
 Although **all routing and benign interaction URLs are restricted to a single repository**, the adversary’s observation scope is **not limited to that repository alone**.
