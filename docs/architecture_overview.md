@@ -11,7 +11,7 @@ DeployStega is organized around a **dataset-centric evaluation pipeline**:
 
 1. **Interaction Traces** represent observable platform behavior.
 2. **Datasets** group traces into benign and neighboring (DP-style) populations.
-3. **Routing logic** generates feasible, identifier-preserving access patterns.
+3. **Routing logic** generates feasible access patterns.
 4. **Feature extraction** maps datasets to adversary-visible observables.
 5. **Evaluation** compares benign vs. neighboring datasets using these features.
 
@@ -77,19 +77,13 @@ Key components:
 - `repository_snapshot/`  
   Represents a fixed snapshot of repository structure and identifiers.
 
-Routing is:
-- Deterministic
-- Identifier-preserving
-- Independent of behavioral judgment
-
 ---
 
 ### `feasibility_region.py`
 Defines the **FeasibilityRegion interface**:
 - Operates strictly at the URL level
-- Accepts or rejects *exact* URLs
+- Accepts or rejects *exact* URLs (not simply artifacts) at given epoches
 - Encodes behavioral constraints
-- Does not sample, rank, or choose artifacts
 
 ---
 
@@ -98,8 +92,6 @@ Implements a permissive feasibility region placeholder:
 - Allows all URLs by default
 - Exists to support integration before empirical traces are available
 - Will later be replaced by trace-derived allow-lists
-
-This file provides **plumbing**, not behavioral realism.
 
 ---
 
@@ -149,8 +141,6 @@ Contains experiment configuration artifacts:
 - `experiment_manifest.json`
 - snapshot definitions
 
-These files describe **what to run**, not how to run it.
-
 ---
 
 ### `scripts/`
@@ -158,8 +148,6 @@ Contains orchestration utilities:
 - snapshot builders
 - trace template generators
 - experiment context setup
-
-Scripts are intentionally thin and non-magical.
 
 ---
 
