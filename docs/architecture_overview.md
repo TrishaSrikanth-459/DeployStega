@@ -235,44 +235,44 @@ flowchart LR
     %% Raw Interaction Layer
     %% =========================
     subgraph Logs["Raw Platform Logs"]
-        E1[InteractionEvent]
-        E2[InteractionEvent]
-        E3[InteractionEvent]
+        E1["InteractionEvent"]
+        E2["InteractionEvent"]
+        E3["InteractionEvent"]
     end
 
     %% =========================
     %% Trace Construction
     %% =========================
     subgraph Traces["Per-User Traces"]
-        T1[InteractionTrace]
-        T2[InteractionTrace]
-        T3[InteractionTrace]
+        T1["InteractionTrace"]
+        T2["InteractionTrace"]
+        T3["InteractionTrace"]
     end
 
     %% =========================
     %% Dataset Layer
     %% =========================
     subgraph Datasets["Dataset Construction"]
-        BD[BenignDataset (D)]
-        ND[NeighboringDataset (D′)]
+        BD["BenignDataset D"]
+        ND["NeighboringDataset D_prime"]
     end
 
     %% =========================
     %% Routing & Feasibility
     %% =========================
-    subgraph Routing["Routing & Feasibility"]
-        R1[Dead-Drop Resolver]
-        R2[GitHub URL Builder]
-        R3[Feasibility Region]
-        RT[Routing Trace]
+    subgraph Routing["Routing and Feasibility"]
+        R1["Dead Drop Resolver"]
+        R2["GitHub URL Builder"]
+        R3["Feasibility Region"]
+        RT["Routing Trace"]
     end
 
     %% =========================
     %% Feature Extraction
     %% =========================
     subgraph Features["Adversarial Feature Extraction"]
-        FE[Feature Extractors]
-        FS[FeatureSet]
+        FE["Feature Extractors"]
+        FS["FeatureSet"]
     end
 
     %% =========================
