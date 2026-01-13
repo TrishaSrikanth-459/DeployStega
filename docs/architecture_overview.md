@@ -189,31 +189,6 @@ Contains **orchestration and setup utilities** used to construct experiment inpu
 
 ---
 
-### `tests/`
-
-Contains **subsystem-level tests** enforcing correctness and invariants.
-
-Tests are organized around:
-
-- **Dataset immutability**
-  - `BenignDataset`, `NeighboringDataset`, and `InteractionTrace` immutability
-  - replacement correctness for neighboring datasets
-
-- **Routing determinism**
-  - dead-drop resolver stability
-  - deterministic URL resolution given fixed seeds and epochs
-
-- **Feasibility enforcement**
-  - URL-level allow/deny behavior
-  - correct handling of infeasible epochs
-
-- **Feature extraction stability**
-  - extractor determinism
-  - invariance under dataset ordering
-  - consistency across benign vs neighboring datasets
-
----
-
 ## Conceptual Separation Guarantees
 
 The codebase enforces the following separations:
