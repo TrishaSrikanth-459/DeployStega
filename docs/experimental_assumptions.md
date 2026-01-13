@@ -82,10 +82,6 @@ decisions or external collaborators. Such events are treated as
 operation were to occur during an experiment, the run would be considered
 **invalidated**, rather than modeled as a routing failure.
 
-Permission changes and identifier-changing operations are therefore
-**out of scope** for the routing model and are not treated as part of the
-evaluated failure surface.
-
 ---
 
 ## Access Failure Handling
@@ -140,6 +136,7 @@ The model does not assume programmatic access via the GitHub REST or
 GraphQL APIs, nor the use of scripted clients.
 
 ---
+
 ## Experimental Assumption (Collaborator Stability)
 
 For the duration of each DeployStega experiment, **no pending invitations are accepted mid-experiment**, and **the only collaborators present throughout the experiment are the sender and the receiver**.
@@ -160,8 +157,6 @@ Examples of excluded third-party social reactions include (but are not limited t
 
 In real-world organizational repositories, it is common for repositories to include many collaborators, and for social responses to occur as a natural consequence of routine activity. Modeling such reactions would require explicit assumptions about human behavior, notification handling, response latency, and off-platform communication—factors that lie outside the scope of platform-level logging and cannot be reliably inferred from GitHub audit data alone.
 
-Accordingly, **external collaborator participation and social response dynamics are treated as out-of-scope conditions** for the routing model. This assumption is necessary to isolate **platform-level detectability** from uncontrolled social interference and to preserve the interpretability of the empirical indistinguishability measurements underlying DeployStega’s differential-privacy–style evaluation framework.
-
 ---
 
 ## Editorial Constraint (Sender)
@@ -173,17 +168,14 @@ Accordingly, all sender-side mutations modeled in this routing namespace are res
 
 ---
 
----
-
 ## Repository Visibility Assumption (Public vs. Private)
 
 DeployStega’s threat model is **agnostic to repository visibility** (public or private).  
-Detectability is evaluated relative to an adversary with access to **enterprise-level platform logs and metadata**, not relative to public observers or casual repository viewers.
+Detectability is evaluated relative to an adversary with access to **enterprise-level platform logs and metadata**, rather than mere public observers or casual repository viewers.
 
 Accordingly:
-- Public observers and non-collaborator users are **out of scope**.
 - Detectability is defined solely with respect to features extractable from centralized security monitoring infrastructure.
-- Whether a repository is public or private does not materially affect the evaluated feature space, provided that log-level observables remain identical.
+- Whether a repository is public or private does not materially affect the evaluated feature space.
 
 This abstraction reflects realistic enterprise security monitoring, where internal logging visibility is independent of repository publicity.
 
@@ -193,17 +185,12 @@ This abstraction reflects realistic enterprise security monitoring, where intern
 
 Detectability is evaluated **only over activity occurring during the experiment window**, beginning at the epoch origin time.
 
-All repository state that exists prior to experiment start—including:
+All repository features that exist prior to experiment start, including:
 - existing issues, pull requests, comments, and commits,
 - repository age, structure, and historical activity,
+are **fixed background context** that the adversary does not evaluate as detectability signals. 
 
-is treated as **fixed background context** and is conditioned upon rather than evaluated.
-
-This mirrors standard anomaly-detection and differential-privacy formulations, in which:
-- the baseline dataset is assumed given, and
-- detectability is measured with respect to **incremental deviations** introduced by a single user’s behavior.
-
-Pre-existing repository content is therefore not itself considered a detectability signal, but rather part of the conditioning environment.
+According to our differential-privacy formulation, detectability is measured with respect to **incremental deviations** introduced by a single user’s behavior.
 
 ---
 
@@ -238,21 +225,24 @@ The adversary:
 - does not generate content, comments, or reactions,
 - does not influence repository state during the experiment.
 
-This separation prevents adversarial participation from introducing trivial or degenerate detection mechanisms and aligns with standard security monitoring threat models.
+Crucially, DeployStega **does not model an active adversary who tampers with the covert communication channel itself** (e.g., by editing artifacts, injecting misleading content, deleting messages, or otherwise interfering with sender–receiver interactions).  
+Such an adversary would trivially defeat any application-layer steganographic scheme by disrupting or corrupting the carrier artifacts, rendering detectability analysis ill-posed.
+
+By restricting the adversary to **passive observation of platform-level logs**, DeployStega isolates the core research question:  
+whether covert communication can remain statistically indistinguishable from benign activity **under realistic security monitoring**, rather than under channel sabotage.
 
 ---
 
 ## Detectability of Repository Population Characteristics
 
-DeployStega does not model detectability arising from repository-level population characteristics such as:
+**Throughout all DeployStega experiments, the sender and the receiver are the only repository collaborators.**  
+
+Accordingly, DeployStega does **not** model detectability arising from repository-level population characteristics, including (but not limited to):
 - collaborator count,
-- organizational size,
 - social graph structure,
-- project popularity or external visibility.
+- repository popularity, age, or external visibility.
 
-Detectability is defined **relative to the adversary’s capability class F**, which is intentionally limited to log-level semantic, behavioral, and routing observables. Repository population characteristics are excluded from F and therefore do not contribute to ε within the experimental evaluation.
-
-This choice prioritizes controlled measurement of covert signaling structure over broad sociological realism, and is consistent with the system-level focus of the framework.
+This choice reflects the core objective of DeployStega: to evaluate whether *replacing a single benign user’s interaction log with a covert user’s log* produces a statistically detectable deviation in routing, behavioral, or semantic aspects, **holding the surrounding repository context constant**. Allowing collaborator population to vary would introduce uncontrolled social and organizational factors that are orthogonal to the covert signaling mechanism under study.
 
 ---
 
