@@ -1,3 +1,12 @@
+# Experimental Assumptions
+
+This document enumerates the assumptions under which DeployStega
+experiments are defined, executed, and evaluated. These assumptions
+are explicit, intentional, and necessary to isolate platform-level
+detectability from uncontrolled social or organizational factors.
+
+---
+
 ## Sender and Receiver Interaction Roles (with Initial Permission Assumptions)
 The routing namespace enumerates addressable artifact classes independent
 of actor role.
