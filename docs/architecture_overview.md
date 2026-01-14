@@ -379,7 +379,7 @@ The diagram below shows the end-to-end dataflow in DeployStega, from routing dec
 * No component mutates upstream data
 
 ```
-mermaidflowchart LR
+flowchart LR
 
     %% =========================
     %% Routing Output
