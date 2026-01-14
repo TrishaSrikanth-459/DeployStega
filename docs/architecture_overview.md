@@ -1,364 +1,436 @@
-# DeployStega Codebase — Pipeline & Module Guide
+# DeployStega Codebase — File-by-File Architecture Guide
 
-This document describes the current structure of the DeployStega codebase, the role of each module, and how data flows through the system **as it exists today**.  
-It is intended as an internal architectural guide rather than a user-facing tutorial.
+This document provides a **complete, file-level overview** of the DeployStega codebase.
+Each file is listed exactly once, with a concise explanation of:
 
----
+- **What it represents**
+- **What responsibility it has**
+- **How it is used in the pipeline**
 
-## High-Level Pipeline Overview
-
-DeployStega is organized around a **dataset-centric evaluation pipeline**:
-
-1. **Interaction Traces** represent observable platform behavior.
-2. **Datasets** group traces into benign and neighboring (DP-style) populations.
-3. **Routing logic** generates feasible access patterns.
-4. **Feature extraction** maps datasets to adversary-visible observables.
-5. **Evaluation** compares benign vs. neighboring datasets using these features.
-
-The system is intentionally modular so that semantic, behavioral, and routing components can be composed or evaluated independently.
+This is an internal architectural reference.
 
 ---
 
-## Core Data Model (`dataset/`)
+## Dataset Layer (`dataset/`)
 
-The `dataset` package defines the **authoritative representation of platform logs**.
+This package defines the **authoritative data model** used throughout DeployStega.
 
 ### `interaction_event.py`
-Defines `InteractionEvent`, the smallest observable unit:
-- timestamp
-- action type
-- artifact identifiers
-- immutable metadata
+Defines `InteractionEvent`, the smallest adversary-observable unit.
 
-This corresponds directly to what an adversary could observe in logs.
+Represents a **single log entry** an adversary could observe.
+
+Used by:
+- `routing_trace_to_interaction.py`
+- Feature extractors
 
 ---
 
 ### `interaction_trace.py`
-Defines `InteractionTrace`, an **immutable, ordered sequence** of `InteractionEvent`s for a single user.
+Defines `InteractionTrace`, an immutable ordered sequence of `InteractionEvent`s.
 
-A trace represents *one user’s complete interaction history* over the measurement window.
+Represents **one user’s complete interaction history**.
+
+Used by:
+- `BenignDataset`
+- `NeighboringDataset`
+- Feature pipelines
 
 ---
 
 ### `benign_dataset.py`
-Defines `BenignDataset`:
-- An immutable collection of `InteractionTrace`s
-- One trace per user
-- Represents dataset **D** in the DP-style formulation
+Defines `BenignDataset`.
+
+An immutable collection of `InteractionTrace`s representing dataset **D**.
+
+Used by:
+- Feature extraction
+- Neighboring dataset construction
+- Evaluation logic
 
 ---
 
 ### `neighboring_dataset.py`
-Defines `NeighboringDataset`:
-- Wraps a `BenignDataset`
-- Replaces exactly *k* user traces with synthetic or covert traces
-- Represents dataset **D′**
+Defines `NeighboringDataset`.
 
-Critically:
-- Dataset size is unchanged
-- Only per-user traces differ
-- No feature extractor is aware whether it is operating on D or D′
+Wraps a `BenignDataset` and replaces exactly *k* user traces.
+Represents dataset **D′**.
+
+Used by:
+- Differential privacy experiments
+- Adversarial indistinguishability testing
 
 ---
 
 ### `routing_trace_record.py`
+Defines `RoutingTraceRecord`.
 
-Defines the canonical representation of a single routing action.
+Represents **one routing decision** emitted by the resolver.
 
-A `RoutingTraceRecord` corresponds to one resolver decision as it would appear in logs:
-- role (`sender` or `receiver`)
-- epoch index
-- artifact class
-- artifact identifier tuple
-- concrete GitHub URL
-- optional timestamp and metadata
-
-#### Responsibilities:
-- Parse routing traces from JSONL
+Responsibilities:
+- Parse routing JSONL
 - Validate required fields
-- Normalize identifiers into immutable tuples
-- Preserve exact URL strings
+- Normalize identifiers
+- Preserve URLs exactly
 
-This module performs no interpretation and no aggregation. It exists solely to establish a stable, typed boundary between routing output and dataset construction.
+Used by:
+- `routing_trace_to_interaction.py`
+- Inspection and conversion scripts
 
 ---
 
 ### `routing_trace_to_interaction.py`
+Converts routing records into adversary-visible logs.
 
-Converts routing records into log-level interaction objects.
+Responsibilities:
+- `RoutingTraceRecord → InteractionEvent`
+- Group events by user
+- Build `InteractionTrace`s
+- Optionally synthesize timestamps deterministically
 
-#### Responsibilities:
-- Map each `RoutingTraceRecord` → `InteractionEvent`
-- Encode artifact identity in a stable, extractor-friendly format
-- Attach routing metadata (URL, epoch, role) immutably
-- Group events by user (typically `sender` vs. `receiver`)
-- Construct `InteractionTrace` objects
-
-If routing traces lack timestamps, this module can:
-- Deterministically synthesize timestamps from epoch structure (pure scaffolding, not behavioral modeling)
-
-This file is the only place where routing output becomes adversary-observable log events.
+This is the **boundary between routing output and dataset construction**.
 
 ---
 
 ### `build_neighboring_dataset_from_routing.py`
+Bridges routing traces into datasets.
 
-Bridges routing traces into the DP-style dataset abstraction.
+Responsibilities:
+- Load routing JSONL
+- Build interaction traces
+- Construct `BenignDataset`
+- Construct `NeighboringDataset`
+- Enforce exact-k replacement semantics
 
-## Responsibilities:
-- Convert routing trace JSONL → `InteractionTrace`s
-- Assemble a `BenignDataset` from existing traces
-- Construct a `NeighboringDataset` by replacing exactly k user traces
-- Enforce:
-  - immutability
-  - index validity
-  - exact-k replacement semantics
+Used by:
+- End-to-end experiments
+- Dataset validation tests
 
-### This module ensures:
-- Dataset size is unchanged
-- Only per-user traces differ between D and D′
-- Feature extractors remain dataset-agnostic
+---
 
-## Routing and Feasibility (`routing/`)
+## Routing Layer (`routing/`)
 
-The `routing` package defines **how sender and receiver interact with platform artifacts** while preserving identifier stability and behavioral plausibility.
+Defines how platform artifacts are deterministically selected.
 
-### `dead_drop_function/`
-Implements deterministic routing logic.
+### `dead_drop_function/dead_drop_resolver.py`
+Implements deterministic dead-drop routing.
 
-Key components:
-- `dead_drop_resolver.py`  
-  Deterministically maps shared seeds and epochs to artifact identifiers.
-- `github_url_builder.py`  
-  Constructs concrete GitHub URLs from identifier tuples.
-- `repository_snapshot/`  
-  Represents a fixed snapshot of repository structure and identifiers.
+Maps `(epoch, shared seed)` → artifact identifier.
+
+Used by:
+- Interactive console
+- Automated routing scripts
+
+---
+
+### `dead_drop_function/github_url_builder.py`
+Constructs concrete GitHub URLs from artifact identifiers.
+
+Ensures URLs are stable and reproducible.
+
+Used by:
+- Resolver
+- Routing trace logging
+
+---
+
+### `dead_drop_function/repository_snapshot/`
+Represents a frozen view of repository structure.
+
+Ensures routing only targets existing artifacts.
+
+Used by:
+- Resolver
+- Experiment context
 
 ---
 
 ### `feasibility_region.py`
-Defines the **FeasibilityRegion interface**:
-- Operates strictly at the URL level
-- Accepts or rejects *exact* URLs (not simply artifacts) at given epoches
-- Encodes behavioral constraints
+Defines the `FeasibilityRegion` interface.
+
+Accepts or rejects **exact URLs** per epoch.
+
+Used by:
+- Resolver
+- Behavioral constraint modeling
 
 ---
 
 ### `trace_weighted_feasibility.py`
-Implements a permissive feasibility region placeholder:
-- Allows all URLs by default
-- Exists to support integration before empirical traces are available
-- Will later be replaced by trace-derived allow-lists
+Temporary allow-all feasibility region.
+
+Exists to allow routing before empirical traces exist.
+
+Used by:
+- Early-stage integration
+- Interactive testing
 
 ---
 
 ### `routing_trace.py`
-Represents a concrete routing trace produced by:
-- Resolver output
-- Feasibility filtering
-- Role-specific access behavior
+Defines the routing trace abstraction.
 
-Routing traces are later converted into `InteractionTrace`s.
+Represents resolver output before conversion into interaction logs.
+
+Used by:
+- Routing trace logging
+- Conversion scripts
 
 ---
 
 ## Feature Extraction (`features/`)
 
-The `features` package defines the adversary’s **capability class F**.
+Defines the adversary’s observation capabilities.
 
 ### `extractor.py`
-Defines the abstract `FeatureExtractor`:
+Defines the abstract `FeatureExtractor`.
+
+Properties:
 - Deterministic
-- Dataset-agnostic (D vs. D′)
-- Purely observational
+- Dataset-agnostic
 - No side effects
+
+Implemented by concrete feature extractors.
 
 ---
 
 ### `feature_set.py`
-Defines `FeatureSet`:
-- Immutable mapping from feature name → extracted values
-- Represents the *entire observable output* of an adversary
+Defines `FeatureSet`.
+
+Immutable mapping from feature name to extracted value.
+
+Represents the **entire adversary observation**.
 
 ---
 
 ### `pipeline.py`
-Defines `FeatureExtractionPipeline`:
-- Applies a fixed set of feature extractors to a dataset
-- Produces a `FeatureSet`
-- Enforces extractor-name uniqueness
-- Does not interpret features
+Defines `FeatureExtractionPipeline`.
+
+Applies a fixed set of feature extractors to a dataset.
+
+Used by:
+- Evaluation scripts
+- Experimental analysis
 
 ---
 
-## Experiments and Scripts
+## Experiments (`experiments/`)
 
-### `experiments/`
+Defines **what** an experiment is.
 
-Contains **experiment configuration artifacts** that define *what* an experiment is, independent of execution.
+### `experiment_manifest.json`
+Canonical experiment configuration.
 
-- **`experiment_manifest.json`**  
-  Canonical, immutable configuration for a DeployStega experiment run.  
-  Defines:
-  - experiment identifier
-  - epoch schedule
-  - sender / receiver roles
-  - routing mode and parameters
-  - pointer to the repository snapshot to use  
-  This file is read by orchestration scripts and is never mutated at runtime.
+Defines:
+- Experiment ID
+- Epoch schedule
+- Roles
+- Routing parameters
+- Snapshot reference
 
-- **`snapshot.json`** (or snapshot definition files)  
-  Represents a **frozen view of the repository state** used during the experiment.  
-  Enumerates all snapshot-valid artifacts (issues, comments, commits, etc.) so that:
-  - dead-drop resolution only targets existing artifacts
-  - routing is deterministic and reproducible
-  - no artifact creation occurs during the experiment  
-  Treated as immutable background context.
+Read by:
+- `experiment_context.py`
 
 ---
 
-### `scripts/`
+## Scripts (`scripts/`)
 
-Contains **orchestration and setup utilities** used to construct experiment inputs.
+Defines **how experiments are executed**.
 
-- **`build_snapshot.py`**  
-  Builds a repository snapshot used for routing.  
-  Responsible for:
-  - querying repository metadata
-  - enumerating snapshot-valid artifacts
-  - validating epoch origin / end times
-  - writing snapshot files used by the resolver
+### `experiment_context.py`
+Loads and validates experiment configuration.
 
-- **`interactive_dead_drop.py`**  
-  Interactive console tool for executing dead-drop routing logic.  
-  Responsible for:
-  - resolving deterministic dead-drop URLs per epoch
-  - enforcing feasibility-region constraints
-  - handling epoch countdowns and termination
-  - producing routing traces for inspection
+Wires together:
+- Snapshot
+- Routing
+- Feasibility
 
-- **`experiment_context.py`**  
-  Loads and validates experiment configuration at runtime.  
-  Responsible for:
-  - reading `experiment_manifest.json`
-  - wiring together snapshot, routing, and feasibility components
-  - exposing a unified context object to orchestration code
+Used by:
+- Interactive console
+- Automated scripts
 
 ---
 
-## Conceptual Separation Guarantees
+### `interactive_dead_drop.py`
+Interactive routing console.
 
-The codebase enforces the following separations:
+Responsibilities:
+- Countdown to epoch start
+- Role selection
+- Identity verification
+- Routing execution
+- Routing trace logging
 
-- **Routing vs. Feasibility**  
-  Routing chooses identifiers; feasibility only restricts URLs.
-
-- **Behavior vs. Semantics**  
-  Timing and access patterns are independent of message content.
-
-- **Dataset vs. Features**  
-  Feature extractors never mutate or inspect dataset provenance.
-
-- **Adversary vs. Participants**  
-  The adversary observes logs; it does not interact with the repository.
+Primary tool for **manual execution**.
 
 ---
 
-## Current Scope Status
+### `convert_routing_trace.py`
+CLI utility for converting routing traces into datasets.
 
-At present, the codebase fully supports:
-- Deterministic routing
-- Dataset construction (D and D′)
-- Feature extraction pipelines
-- Formal DP-style neighboring datasets
-
-Semantic steganography, behavioral generators, and adversarial classifiers are designed but intentionally modular and not yet integrated.
+Used to:
+- Validate routing → dataset conversion
+- Debug dataset construction
 
 ---
 
-## Intended Audience
+### `inspect_routing_conversion.py`
+Inspection utility.
 
-This document is written for:
-- Project collaborators
-- Paper reviewers
-- Future maintainers
+Prints:
+- RoutingTraceRecords
+- InteractionEvents
+- InteractionTraces
+- Dataset structure
 
-It assumes familiarity with:
-- Differential privacy
-- Log-based anomaly detection
-- Platform-mediated communication systems
+Used to **see exactly what gets built**.
+
+---
+
+### `build_snapshot.py`
+Builds repository snapshot files.
+
+Queries GitHub metadata and writes immutable snapshots.
+
+Used before experiments.
+
+---
+
+## Tests (`tests/`)
+
+Ensures correctness and invariants.
+
+### `test_dataset_construction.py`
+Tests:
+- BenignDataset immutability
+- Indexing behavior
+
+---
+
+### `test_neighboring_dataset.py`
+Tests:
+- Exact-k replacement
+- Dataset size invariance
+- Index transparency
+
+---
+
+### `test_routing_trace_to_event.py`
+Tests:
+- Single-record conversion
+- Timestamp handling
+- Action type mapping
+
+---
+
+### `test_routing_trace_to_trace.py`
+Tests:
+- Event ordering
+- Trace construction
+- Deterministic sorting
+
+---
+
+### `test_end_to_end_conversion.py`
+Tests:
+- Routing JSONL → dataset pipeline
+- Full structural correctness
+
+---
+
+## How to Run Tests
+
+Run all tests from the repository root:
+
+```bash
+pytest
+How to Inspect Routing Conversion Output
+To see exactly what an interaction event, trace, and dataset look like:
+
+bash
+Copy code
+python -m scripts.inspect_routing_conversion \
+  --routing-trace experiments/routing_trace.jsonl
+If timestamps are missing, supply timing parameters:
+
+bash
+Copy code
+python -m scripts.inspect_routing_conversion \
+  --routing-trace experiments/routing_trace.jsonl \
+  --epoch-origin-unix <unix_time> \
+  --epoch-duration-seconds <seconds>
 
 ---
 
 ## System Architecture Diagram
 
-The following diagram illustrates how DeployStega’s components compose into a
-dataset-centric evaluation pipeline. Rectangles represent immutable data
-objects; rounded boxes represent deterministic transformations.
+The following diagram shows the **end-to-end dataflow** in DeployStega, from routing decisions to adversary-visible features.
+
+- **Rectangles** represent immutable data objects  
+- **Rounded nodes** represent deterministic transformations  
+- No component mutates upstream data
 
 ```mermaid
 flowchart LR
+
     %% =========================
-    %% Raw Interaction Layer
+    %% Routing Output
     %% =========================
-    subgraph Logs["Raw Platform Logs"]
-        E1["InteractionEvent"]
-        E2["InteractionEvent"]
-        E3["InteractionEvent"]
+    subgraph Routing["Routing Layer"]
+        R1["DeadDropResolver"]
+        R2["GitHubURLBuilder"]
+        R3["FeasibilityRegion"]
+        RT["RoutingTrace (JSONL)"]
     end
 
     %% =========================
-    %% Trace Construction
+    %% Routing Record Layer
     %% =========================
-    subgraph Traces["Per-User Traces"]
-        T1["InteractionTrace"]
-        T2["InteractionTrace"]
-        T3["InteractionTrace"]
+    subgraph Records["Routing Trace Records"]
+        RR["RoutingTraceRecord"]
+    end
+
+    %% =========================
+    %% Interaction Layer
+    %% =========================
+    subgraph Interaction["Interaction Construction"]
+        IE["InteractionEvent"]
+        IT["InteractionTrace"]
     end
 
     %% =========================
     %% Dataset Layer
     %% =========================
-    subgraph Datasets["Dataset Construction"]
-        BD["BenignDataset D"]
-        ND["NeighboringDataset D_prime"]
-    end
-
-    %% =========================
-    %% Routing & Feasibility
-    %% =========================
-    subgraph Routing["Routing and Feasibility"]
-        R1["Dead Drop Resolver"]
-        R2["GitHub URL Builder"]
-        R3["Feasibility Region"]
-        RT["Routing Trace"]
+    subgraph Dataset["Dataset Construction"]
+        BD["BenignDataset (D)"]
+        ND["NeighboringDataset (D_prime)"]
     end
 
     %% =========================
     %% Feature Extraction
     %% =========================
     subgraph Features["Adversarial Feature Extraction"]
-        FE["Feature Extractors"]
+        FE["FeatureExtractors"]
         FS["FeatureSet"]
     end
 
     %% =========================
-    %% Connections
+    %% Data Flow
     %% =========================
-    E1 --> T1
-    E2 --> T2
-    E3 --> T3
-
-    T1 --> BD
-    T2 --> BD
-    T3 --> BD
-
-    BD --> ND
-
     R1 --> R2
     R2 --> R3
     R3 --> RT
+
+    RT --> RR
+    RR --> IE
+    IE --> IT
+
+    IT --> BD
+    BD --> ND
+
+    BD --> FE
+    ND --> FE
+    FE --> FS
 
     RT --> ND
 
