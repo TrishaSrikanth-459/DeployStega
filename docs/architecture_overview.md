@@ -378,7 +378,6 @@ The diagram below shows the end-to-end dataflow in DeployStega, from routing dec
 * Rounded nodes represent deterministic transformations
 * No component mutates upstream data
 
-```
 flowchart TD
 
     %% =========================
@@ -439,4 +438,3 @@ flowchart TD
     BD --> FE
     ND --> FE
     FE --> FS
-```
