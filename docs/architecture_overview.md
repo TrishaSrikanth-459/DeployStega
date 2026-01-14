@@ -341,36 +341,43 @@ Tests:
 ## How to Run Tests
 
 Run all tests from the repository root:
-
-```bash
+```
 pytest
-How to Inspect Routing Conversion Output
-To see exactly what an interaction event, trace, and dataset look like:
+```
 
-bash
-Copy code
+## How to Inspect Routing Conversion Output
+
+To inspect exactly what an `InteractionEvent`, `InteractionTrace`, and dataset look like when converted from a routing trace:
+```
 python -m scripts.inspect_routing_conversion \
   --routing-trace experiments/routing_trace.jsonl
-If timestamps are missing, supply timing parameters:
+```
 
-bash
-Copy code
+If the routing trace does not contain timestamps, provide deterministic timing parameters:
+```
 python -m scripts.inspect_routing_conversion \
   --routing-trace experiments/routing_trace.jsonl \
   --epoch-origin-unix <unix_time> \
   --epoch-duration-seconds <seconds>
+```
 
----
+This command will print:
 
-## System Architecture Diagram
+* Parsed `RoutingTraceRecord`s
+* Generated `InteractionEvent`s
+* Constructed `InteractionTrace`s grouped by user
+* Dataset-level summaries
 
-The following diagram shows the **end-to-end dataflow** in DeployStega, from routing decisions to adversary-visible features.
+No files are modified; this is a read-only inspection utility.
 
-- **Rectangles** represent immutable data objects  
-- **Rounded nodes** represent deterministic transformations  
-- No component mutates upstream data
+# System Architecture Diagram
 
-```mermaid
+The diagram below shows the end-to-end dataflow in DeployStega, from routing decisions to adversary-visible features.
+
+* Rectangles represent immutable data objects
+* Rounded nodes represent deterministic transformations
+* No component mutates upstream data
+```
 flowchart LR
 
     %% =========================
@@ -431,9 +438,4 @@ flowchart LR
     BD --> FE
     ND --> FE
     FE --> FS
-
-    RT --> ND
-
-    BD --> FE
-    ND --> FE
-    FE --> FS
+```
