@@ -2,14 +2,15 @@ from dataset.neighboring_dataset import NeighboringDataset
 from dataset.benign_dataset import BenignDataset
 from dataset.interaction_trace import InteractionTrace
 
+
 def test_neighboring_dataset_replacement():
     base = BenignDataset([
-        InteractionTrace(["a"]),
-        InteractionTrace(["b"]),
-        InteractionTrace(["c"]),
+        InteractionTrace(("a",)),
+        InteractionTrace(("b",)),
+        InteractionTrace(("c",)),
     ])
 
-    replacement = InteractionTrace(["X"])
+    replacement = InteractionTrace(("X",))
 
     nd = NeighboringDataset(base, {1: replacement})
 
