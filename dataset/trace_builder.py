@@ -1,78 +1,78 @@
+"""
+dataset/trace_builder.py
+
+Deterministically constructs InteractionTrace and BenignDataset objects
+from routing trace logs.
+
+This module performs NO inference, learning, or filtering.
+It is a pure structural transformation layer.
+
+Pipeline:
+routing_trace.jsonl
+  → RoutingTraceRecord
+  → InteractionEvent
+  → InteractionTrace
+  → BenignDataset
+"""
+
 from __future__ import annotations
 
-import json
-from collections import defaultdict
-from typing import Iterable, Dict, List
+from typing import Dict
 
-from dataset.interaction_event import InteractionEvent
-from dataset.interaction_trace import InteractionTrace
 from dataset.benign_dataset import BenignDataset
+from dataset.interaction_trace import InteractionTrace
+from dataset.routing_trace_record import read_routing_trace_jsonl
+from dataset.routing_trace_to_interaction import (
+    TimingPolicy,
+    build_interaction_traces,
+)
 
 
 class TraceBuilder:
     """
-    Deterministically constructs InteractionTrace and BenignDataset objects
-    from raw routing trace logs.
+    Canonical dataset builder for routing-trace-based experiments.
 
-    This module performs NO inference, learning, or filtering.
-    It is a pure structural transformation.
+    This class exists to provide a *single, obvious entry point*
+    for converting routing traces into datasets.
     """
 
     @staticmethod
-    def from_jsonl(path: str) -> BenignDataset:
+    def from_routing_trace_jsonl(
+        *,
+        path: str,
+        timing_policy: TimingPolicy | None = None,
+        user_key: str = "role",
+    ) -> BenignDataset:
         """
         Build a BenignDataset from a routing_trace.jsonl file.
 
-        Expected JSONL schema per line:
-        {
-            "timestamp": float,
-            "user_id": str,
-            "action_type": str,
-            "artifact_ids": [...],
-            "metadata": [...]   # optional
-        }
+        Parameters
+        ----------
+        path:
+            Path to routing_trace.jsonl
+        timing_policy:
+            Required if routing records do not include timestamps
+        user_key:
+            How to group users ("role" or "role_epoch")
+
+        Returns
+        -------
+        BenignDataset
         """
-        per_user_events: Dict[str, List[InteractionEvent]] = defaultdict(list)
+        # 1) Load routing trace records
+        records = read_routing_trace_jsonl(path)
 
-        with open(path, "r", encoding="utf-8") as f:
-            for line_number, line in enumerate(f, start=1):
-                line = line.strip()
-                if not line:
-                    continue
+        # 2) Convert to InteractionTraces
+        traces_by_user: Dict[str, InteractionTrace] = build_interaction_traces(
+            records=records,
+            user_key=user_key,
+            timing_policy=timing_policy,
+        )
 
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError as e:
-                    raise ValueError(
-                        f"Invalid JSON at line {line_number}: {e}"
-                    ) from e
+        if not traces_by_user:
+            raise ValueError("No interaction traces constructed from routing trace")
 
-                try:
-                    event = InteractionEvent(
-                        timestamp=float(raw["timestamp"]),
-                        action_type=str(raw["action_type"]),
-                        artifact_ids=tuple(raw["artifact_ids"]),
-                        metadata=tuple(raw.get("metadata", ())),
-                    )
-                    user_id = str(raw["user_id"])
-                except KeyError as e:
-                    raise ValueError(
-                        f"Missing required field {e} at line {line_number}"
-                    ) from e
-
-                per_user_events[user_id].append(event)
-
-        if not per_user_events:
-            raise ValueError("No events found in routing trace")
-
-        # Deterministic ordering
-        traces: List[InteractionTrace] = []
-
-        for user_id in sorted(per_user_events.keys()):
-            events = sorted(
-                per_user_events[user_id],
-                key=lambda e: e.timestamp,
-            )
-            traces.append(InteractionTrace(events))
+        # 3) Deterministic ordering of users
+        traces = [traces_by_user[user] for user in sorted(traces_by_user.keys())]
 
         return BenignDataset(traces)
