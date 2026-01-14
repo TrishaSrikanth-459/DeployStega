@@ -103,20 +103,15 @@ def wait_until_epoch_start(ctx) -> None:
         if remaining > 30:
             minutes = remaining // 60
 
-            if minutes not in printed_minutes:
+            if minutes > 0 and minutes not in printed_minutes:
                 printed_minutes.add(minutes)
-                if minutes > 0:
-                    print(
-                        f"Experiment has not started yet. Begins in "
-                        f"{minutes} minute{'s' if minutes != 1 else ''}"
-                    )
-                else:
-                    print("Experiment has not started yet. Begins in under a minute")
+                print(
+                    f"Experiment has not started yet. Begins in "
+                    f"{minutes} minute{'s' if minutes != 1 else ''}"
+                )
 
-            # Sleep until next minute boundary or 30s threshold
-            next_boundary = max(30, minutes * 60)
-            sleep_for = remaining - next_boundary
-            time.sleep(max(1, min(sleep_for, 30)))
+            # Sleep conservatively toward next boundary
+            time.sleep(1)
             continue
 
         # -------------------------------
@@ -224,10 +219,15 @@ def main():
 
     while True:
         role_input = input("Select role [sender|receiver]: ").strip().lower()
+
+        if not role_input:
+            continue
+
         if role_input in ("sender", "receiver"):
             role: Role = role_input  # type: ignore
             break
-        print("Invalid role.")
+
+        print("Invalid role. Please enter 'sender' or 'receiver'.")
 
     verify_identity_with_backoff(ctx, role)
 
@@ -271,9 +271,6 @@ def main():
                     identifier = result["identifier"]
                     url = result["url"]
 
-                    # --------------------------------------------------
-                    # Ground-truth routing trace logging
-                    # --------------------------------------------------
                     trace_logger.append(
                         experiment_id=ctx.experiment_id,
                         epoch=t,
@@ -313,3 +310,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
