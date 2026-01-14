@@ -1,26 +1,11 @@
-"""
-schema.py
-
-Structural schemas for GitHub artifact identifiers,
-exactly as defined in the DeployStega routing namespace.
-
-This module defines:
-- Artifact classes (canonical, singular)
-- Ordered identifier fields per artifact
-- No addressability logic
-- No behavior
-- No snapshot acquisition
-"""
-
 from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import Enum
 from typing import Tuple, Dict
 
 
 # =========================
-# Artifact Classes
+# Artifact Classes (ROUTING ONLY)
 # =========================
 
 class ArtifactClass(Enum):
@@ -28,21 +13,20 @@ class ArtifactClass(Enum):
     Canonical routing namespace artifact classes.
 
     IMPORTANT:
-    - Enum *names* are the canonical class names (and snapshot schema keys)
-    - Enum *values* are descriptive only
-    - Names are singular by design
+    - This enum MUST contain ONLY routing (dead-drop) artifact classes.
+    - Benign interaction classes MUST NOT appear here.
     """
 
     Repository = "repository"
-
     Issue = "issue"
     IssueComment = "issue_comment"
-
     PullRequest = "pull_request"
     PullRequestComment = "pull_request_comment"
-
     Commit = "commit"
     CommitComment = "commit_comment"
+    GitTag = "git_tag"
+    Label = "label"
+    Milestone = "milestone"
 
 
 # =========================
@@ -51,9 +35,6 @@ class ArtifactClass(Enum):
 
 @dataclass(frozen=True)
 class IdentifierField:
-    """
-    A single identifier field in an artifact identifier tuple.
-    """
     name: str
     field_type: str  # "string", "integer", "hash"
 
@@ -64,28 +45,25 @@ class IdentifierField:
 
 @dataclass(frozen=True)
 class ArtifactIdentifierSchema:
-    """
-    Ordered identifier schema for a GitHub artifact class.
-    """
     artifact_class: ArtifactClass
     fields: Tuple[IdentifierField, ...]
 
 
 # =========================
-# Canonical Schemas (URL-faithful)
+# Canonical Schemas
 # =========================
 
 REPOSITORY_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.Repository,
-    fields=(
+    ArtifactClass.Repository,
+    (
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
     ),
 )
 
 ISSUE_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.Issue,
-    fields=(
+    ArtifactClass.Issue,
+    (
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("issue_number", "integer"),
@@ -93,8 +71,8 @@ ISSUE_SCHEMA = ArtifactIdentifierSchema(
 )
 
 ISSUE_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.IssueComment,
-    fields=(
+    ArtifactClass.IssueComment,
+    (
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("issue_number", "integer"),
@@ -102,8 +80,8 @@ ISSUE_COMMENT_SCHEMA = ArtifactIdentifierSchema(
 )
 
 PULL_REQUEST_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.PullRequest,
-    fields=(
+    ArtifactClass.PullRequest,
+    (
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("pull_number", "integer"),
@@ -111,8 +89,8 @@ PULL_REQUEST_SCHEMA = ArtifactIdentifierSchema(
 )
 
 PULL_REQUEST_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.PullRequestComment,
-    fields=(
+    ArtifactClass.PullRequestComment,
+    (
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("pull_number", "integer"),
@@ -120,8 +98,8 @@ PULL_REQUEST_COMMENT_SCHEMA = ArtifactIdentifierSchema(
 )
 
 COMMIT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.Commit,
-    fields=(
+    ArtifactClass.Commit,
+    (
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("commit_sha", "hash"),
@@ -129,40 +107,57 @@ COMMIT_SCHEMA = ArtifactIdentifierSchema(
 )
 
 COMMIT_COMMENT_SCHEMA = ArtifactIdentifierSchema(
-    artifact_class=ArtifactClass.CommitComment,
-    fields=(
+    ArtifactClass.CommitComment,
+    (
         IdentifierField("owner", "string"),
         IdentifierField("repo", "string"),
         IdentifierField("commit_sha", "hash"),
     ),
 )
 
+GIT_TAG_SCHEMA = ArtifactIdentifierSchema(
+    ArtifactClass.GitTag,
+    (
+        IdentifierField("owner", "string"),
+        IdentifierField("repo", "string"),
+        IdentifierField("tag", "string"),
+    ),
+)
 
-# =========================
-# Schema Registry
-# =========================
+LABEL_SCHEMA = ArtifactIdentifierSchema(
+    ArtifactClass.Label,
+    (
+        IdentifierField("owner", "string"),
+        IdentifierField("repo", "string"),
+        IdentifierField("label_name", "string"),
+    ),
+)
+
+MILESTONE_SCHEMA = ArtifactIdentifierSchema(
+    ArtifactClass.Milestone,
+    (
+        IdentifierField("owner", "string"),
+        IdentifierField("repo", "string"),
+        IdentifierField("milestone_number", "integer"),
+    ),
+)
 
 SCHEMA_REGISTRY: Dict[ArtifactClass, ArtifactIdentifierSchema] = {
-    ArtifactClass.Repository: REPOSITORY_SCHEMA,
-
-    ArtifactClass.Issue: ISSUE_SCHEMA,
-    ArtifactClass.IssueComment: ISSUE_COMMENT_SCHEMA,
-
-    ArtifactClass.PullRequest: PULL_REQUEST_SCHEMA,
-    ArtifactClass.PullRequestComment: PULL_REQUEST_COMMENT_SCHEMA,
-
-    ArtifactClass.Commit: COMMIT_SCHEMA,
-    ArtifactClass.CommitComment: COMMIT_COMMENT_SCHEMA,
+    s.artifact_class: s
+    for s in [
+        REPOSITORY_SCHEMA,
+        ISSUE_SCHEMA,
+        ISSUE_COMMENT_SCHEMA,
+        PULL_REQUEST_SCHEMA,
+        PULL_REQUEST_COMMENT_SCHEMA,
+        COMMIT_SCHEMA,
+        COMMIT_COMMENT_SCHEMA,
+        GIT_TAG_SCHEMA,
+        LABEL_SCHEMA,
+        MILESTONE_SCHEMA,
+    ]
 }
 
 
 def get_schema(artifact_class: ArtifactClass) -> ArtifactIdentifierSchema:
-    """
-    Retrieve the canonical identifier schema for an artifact class.
-    """
-    try:
-        return SCHEMA_REGISTRY[artifact_class]
-    except KeyError as e:
-        raise KeyError(
-            f"No identifier schema registered for artifact class: {artifact_class}"
-        ) from e
+    return SCHEMA_REGISTRY[artifact_class]
