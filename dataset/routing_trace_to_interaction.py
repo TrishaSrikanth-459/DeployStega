@@ -168,3 +168,88 @@ def events_to_traces(events_by_user: Dict[str, Tuple[InteractionEvent, ...]]) ->
     for user, events in events_by_user.items():
         traces[user] = InteractionTrace(events)
     return traces
+
+def routing_record_to_event(
+    rec: RoutingTraceRecord,
+    *,
+    timing_policy: Optional[TimingPolicy] = None,
+    index_within_bucket: int = 0,
+    bucket_size: int = 1,
+) -> InteractionEvent:
+    """
+    Convert a single RoutingTraceRecord into an InteractionEvent.
+
+    This is a thin, deterministic adapter used primarily for:
+    - unit testing
+    - local validation
+    - documentation of the atomic mapping
+
+    If rec.timestamp is None, timing_policy MUST be provided.
+    """
+
+    if rec.timestamp is not None:
+        ts = float(rec.timestamp)
+    else:
+        if timing_policy is None:
+            raise ValueError(
+                "RoutingTraceRecord has no timestamp; timing_policy required to synthesize one."
+            )
+        ts = _synthesize_timestamp(
+            timing_policy,
+            rec,
+            index_within_bucket=index_within_bucket,
+            bucket_size=bucket_size,
+        )
+
+    return InteractionEvent(
+        timestamp=ts,
+        action_type=rec.action_type,
+        artifact_ids=_stable_artifact_ids(rec),
+        metadata=_stable_metadata(rec),
+    )
+
+def build_interaction_traces(
+    *,
+    records: Iterable[RoutingTraceRecord],
+    user_key: str = "role",
+    timing_policy: Optional[TimingPolicy] = None,
+) -> Dict[str, InteractionTrace]:
+    """
+    Canonical conversion entry point:
+
+    RoutingTraceRecord*  →  InteractionTrace per user.
+
+    This is the function the pipeline should use when converting
+    routing traces into adversary-visible interaction traces.
+    """
+    events_by_user = records_to_events_by_user(
+        records=records,
+        user_key=user_key,
+        timing_policy=timing_policy,
+    )
+    return events_to_traces(events_by_user)
+
+def build_interaction_trace(
+    *,
+    records: Iterable[RoutingTraceRecord],
+    user_key: str = "role",
+    timing_policy: Optional[TimingPolicy] = None,
+) -> InteractionTrace:
+    """
+    Convenience wrapper for cases where exactly one InteractionTrace
+    is expected (e.g., unit tests).
+
+    Raises if multiple users are present.
+    """
+    traces = build_interaction_traces(
+        records=records,
+        user_key=user_key,
+        timing_policy=timing_policy,
+    )
+
+    if len(traces) != 1:
+        raise ValueError(
+            f"Expected exactly one InteractionTrace, got {len(traces)}: {list(traces.keys())}"
+        )
+
+    return next(iter(traces.values()))
