@@ -379,51 +379,38 @@ The diagram below shows the end-to-end dataflow in DeployStega, from routing dec
 * No component mutates upstream data
 ```
 flowchart LR
-
-    %% =========================
     %% Routing Output
-    %% =========================
-    subgraph Routing["Routing Layer"]
-        R1["DeadDropResolver"]
-        R2["GitHubURLBuilder"]
-        R3["FeasibilityRegion"]
-        RT["RoutingTrace (JSONL)"]
+    subgraph Routing[Routing Layer]
+        R1[DeadDropResolver]
+        R2[GitHubURLBuilder]
+        R3[FeasibilityRegion]
+        RT[RoutingTrace JSONL]
     end
 
-    %% =========================
     %% Routing Record Layer
-    %% =========================
-    subgraph Records["Routing Trace Records"]
-        RR["RoutingTraceRecord"]
+    subgraph Records[Routing Trace Records]
+        RR[RoutingTraceRecord]
     end
 
-    %% =========================
     %% Interaction Layer
-    %% =========================
-    subgraph Interaction["Interaction Construction"]
-        IE["InteractionEvent"]
-        IT["InteractionTrace"]
+    subgraph Interaction[Interaction Construction]
+        IE[InteractionEvent]
+        IT[InteractionTrace]
     end
 
-    %% =========================
     %% Dataset Layer
-    %% =========================
-    subgraph Dataset["Dataset Construction"]
-        BD["BenignDataset (D)"]
-        ND["NeighboringDataset (D_prime)"]
+    subgraph Dataset[Dataset Construction]
+        BD[BenignDataset D]
+        ND[NeighboringDataset D_prime]
     end
 
-    %% =========================
     %% Feature Extraction
-    %% =========================
-    subgraph Features["Adversarial Feature Extraction"]
-        FE["FeatureExtractors"]
-        FS["FeatureSet"]
+    subgraph Features[Adversarial Feature Extraction]
+        FE[FeatureExtractors]
+        FS[FeatureSet]
     end
 
-    %% =========================
     %% Data Flow
-    %% =========================
     R1 --> R2
     R2 --> R3
     R3 --> RT
