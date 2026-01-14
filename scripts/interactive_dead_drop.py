@@ -79,8 +79,15 @@ def seconds_until_next_epoch(ctx) -> int:
 
 
 def wait_until_epoch_start(ctx) -> None:
-    checkpoints = [300, 240, 180, 120, 60, 30, 15, 10]
-    announced = set()
+    """
+    Human-friendly countdown policy:
+    - Print only when minute value changes
+    - Announce once at 30s and 15s
+    - Final 5–4–3–2–1 countdown
+    """
+    printed_minutes = set()
+    announced_30 = False
+    announced_15 = False
 
     while True:
         now = int(time.time())
@@ -90,32 +97,48 @@ def wait_until_epoch_start(ctx) -> None:
             print("\n=== Epoch started ===\n")
             return
 
-        if not announced:
-            if remaining >= 60:
-                m, s = divmod(remaining, 60)
-                print(f"Experiment has not started yet. Begins in {m}m {s}s")
-            else:
-                print(f"Experiment has not started yet. Begins in {remaining}s")
+        # -------------------------------
+        # Phase 1: minute-level updates
+        # -------------------------------
+        if remaining > 30:
+            minutes = remaining // 60
 
+            if minutes not in printed_minutes:
+                printed_minutes.add(minutes)
+                if minutes > 0:
+                    print(
+                        f"Experiment has not started yet. Begins in "
+                        f"{minutes} minute{'s' if minutes != 1 else ''}"
+                    )
+                else:
+                    print("Experiment has not started yet. Begins in under a minute")
+
+            # Sleep until next minute boundary or 30s threshold
+            next_boundary = max(30, minutes * 60)
+            sleep_for = remaining - next_boundary
+            time.sleep(max(1, min(sleep_for, 30)))
+            continue
+
+        # -------------------------------
+        # Phase 2: threshold announcements
+        # -------------------------------
+        if remaining <= 30 and not announced_30:
+            print("Experiment has not started yet. Begins in 30 seconds")
+            announced_30 = True
+
+        if remaining <= 15 and not announced_15:
+            print("Experiment has not started yet. Begins in 15 seconds")
+            announced_15 = True
+
+        # -------------------------------
+        # Phase 3: final countdown
+        # -------------------------------
         if remaining <= 5:
             for i in range(remaining, 0, -1):
                 print(f"Experiment has not started yet. Begins in {i}")
                 time.sleep(1)
             print("\n=== Epoch started ===\n")
             return
-
-        for t in checkpoints:
-            if remaining <= t and t not in announced:
-                announced.add(t)
-                if t >= 60:
-                    m = t // 60
-                    print(
-                        f"Experiment has not started yet. Begins in "
-                        f"{m} minute{'s' if m > 1 else ''}"
-                    )
-                else:
-                    print(f"Experiment has not started yet. Begins in {t} seconds")
-                break
 
         time.sleep(1)
 
@@ -249,7 +272,7 @@ def main():
                     url = result["url"]
 
                     # --------------------------------------------------
-                    # GROUND-TRUTH TRACE LOGGING (NEW, CRITICAL)
+                    # Ground-truth routing trace logging
                     # --------------------------------------------------
                     trace_logger.append(
                         experiment_id=ctx.experiment_id,
