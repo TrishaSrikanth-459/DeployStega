@@ -1,78 +1,86 @@
+"""
+dataset/routing_trace_writer.py
+
+Canonical writer + loader for routing interaction traces.
+
+This module is intentionally dumb I/O:
+- write JSONL lines in canonical routing-trace schema
+- load JSONL lines back into RoutingTraceRecord objects
+
+It does NOT:
+- construct InteractionEvents
+- build datasets
+- infer timing
+"""
+
 from __future__ import annotations
 
 import json
 import time
-from typing import Any, Iterable, Tuple, List
 from pathlib import Path
+from typing import Any, Iterable, List, Tuple
 
-from dataset.routing_trace_record import RoutingTraceRecord
+from dataset.routing_trace_record import (
+    RoutingTraceRecord,
+    read_routing_trace_jsonl,
+)
+
+
+# ============================================================
+# Writer
+# ============================================================
 
 class RoutingTraceWriter:
     """
     Canonical writer for routing interaction traces.
 
-    Emits JSONL records representing adversary-observable platform events.
+    Emits JSONL records representing routing-layer decisions
+    (not InteractionEvents).
     """
 
-    def __init__(self, path: str):
-        self._path = path
+    def __init__(self, path: str | Path):
+        self._path = Path(path)
 
-    def record(
+    def append(
         self,
         *,
-        user_id: str,
-        action_type: str,
-        artifact_ids: Tuple[Any, ...],
-        metadata: Iterable[Any] = (),
+        role: str,
+        epoch: int,
+        artifact_class: str,
+        identifier: Tuple[Any, ...],
+        url: str,
         timestamp: float | None = None,
+        action_type: str = "route_access",
+        metadata: Iterable[Any] = (),
     ) -> None:
         """
-        Append a single interaction event to the trace log.
+        Append a single routing trace record.
+
+        All fields map 1:1 to RoutingTraceRecord.
         """
-        event = {
+        record = {
+            "role": role,
+            "epoch": int(epoch),
+            "artifactClass": artifact_class,
+            "identifier": list(identifier),
+            "url": url,
             "timestamp": float(timestamp if timestamp is not None else time.time()),
-            "user_id": str(user_id),
-            "action_type": str(action_type),
-            "artifact_ids": list(artifact_ids),
+            "action_type": action_type,
             "metadata": list(metadata),
         }
 
-        with open(self._path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event) + "\n")
+        with self._path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
 
-    def load_routing_trace_jsonl(path: str | Path) -> List[RoutingTraceRecord]:
-        """
-        Load a routing trace JSONL file into RoutingTraceRecord objects.
 
-        This is the canonical inverse of RoutingTraceWriter.record().
-        """
-        path = Path(path)
-        records: List[RoutingTraceRecord] = []
+# ============================================================
+# Loader (canonical inverse)
+# ============================================================
 
-        with path.open("r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, start=1):
-                line = line.strip()
-                if not line:
-                    continue
+def load_routing_trace_jsonl(path: str | Path) -> List[RoutingTraceRecord]:
+    """
+    Load routing trace JSONL file into RoutingTraceRecord objects.
 
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError as e:
-                    raise ValueError(
-                        f"Invalid JSON on line {line_num} of {path}"
-                    ) from e
-
-                records.append(
-                    RoutingTraceRecord(
-                        timestamp=obj["timestamp"],
-                        user_id=obj["user_id"],
-                        action_type=obj["action_type"],
-                        artifact_ids=tuple(obj["artifact_ids"]),
-                        metadata=tuple(obj.get("metadata", ())),
-                    )
-                )
-
-        if not records:
-            raise ValueError(f"No routing trace records found in {path}")
-
-        return records
+    This is the canonical inverse of RoutingTraceWriter.append().
+    """
+    return list(read_routing_trace_jsonl(str(path)))
