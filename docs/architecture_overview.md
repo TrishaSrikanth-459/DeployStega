@@ -379,7 +379,7 @@ The diagram below shows the end-to-end dataflow in DeployStega, from routing dec
 * No component mutates upstream data
 
 ```
-flowchart LR
+flowchart TD
 
     %% =========================
     %% Routing Output
@@ -411,7 +411,7 @@ flowchart LR
     %% =========================
     subgraph Dataset["Dataset Construction"]
         BD["BenignDataset (D)"]
-        ND["NeighboringDataset (D_prime)"]
+        ND["NeighboringDataset (D')"]
     end
 
     %% =========================
