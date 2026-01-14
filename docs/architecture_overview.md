@@ -377,7 +377,7 @@ The diagram below shows the end-to-end dataflow in DeployStega, from routing dec
 * Rectangles represent immutable data objects
 * Rounded nodes represent deterministic transformations
 * No component mutates upstream data
-```
+
 flowchart LR
     %% Routing Output
     subgraph Routing[Routing Layer]
@@ -425,4 +425,4 @@ flowchart LR
     BD --> FE
     ND --> FE
     FE --> FS
-```
+
