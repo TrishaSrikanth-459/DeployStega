@@ -5,7 +5,7 @@ Canonical repository snapshot representation.
 
 This module:
 - Ingests raw enumeration output from enumerators.py
-- Validates identifier tuples against schema.py
+- Validates identifier tuples against schema.py (UPDATED)
 - Normalizes artifacts into a canonical, immutable snapshot object
 - Enforces snapshot-level invariants (uniqueness, schema conformance)
 
@@ -18,7 +18,7 @@ This module performs:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Tuple, Iterable, Any, Mapping
 from collections import defaultdict
 
@@ -29,13 +29,13 @@ from .schema import (
     get_schema,
 )
 
+
 # ============================================================
 # Exceptions
 # ============================================================
 
 class SnapshotError(Exception):
     """Base class for snapshot-related errors."""
-
     def __init__(self, message: str, *, context: Dict[str, Any] | None = None):
         super().__init__(message)
         self.context = context or {}
@@ -48,7 +48,6 @@ class SnapshotError(Exception):
 
 class SchemaViolation(SnapshotError):
     """Raised when an identifier violates its schema."""
-
     def __init__(
         self,
         message: str,
@@ -69,31 +68,14 @@ class SchemaViolation(SnapshotError):
 
 class DuplicateIdentifier(SnapshotError):
     """Raised when duplicate identifiers are detected."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        artifact_class: ArtifactClass,
-        identifier: Tuple[Any, ...],
-    ):
-        super().__init__(
-            message,
-            context={
-                "artifact_class": artifact_class.name,
-                "identifier": identifier,
-            },
-        )
+    def __init__(self, message: str, *, artifact_class: ArtifactClass, identifier: Tuple[Any, ...]):
+        super().__init__(message, context={"artifact_class": artifact_class.name, "identifier": identifier})
 
 
 class UnknownArtifactClass(SnapshotError):
     """Raised when an unknown artifact class string is encountered."""
-
     def __init__(self, raw: str):
-        super().__init__(
-            f"Unknown artifact class '{raw}'",
-            context={"raw_class": raw},
-        )
+        super().__init__(f"Unknown artifact class '{raw}'", context={"raw_class": raw})
 
 
 # ============================================================
@@ -104,7 +86,6 @@ def _coerce_field(value: Any, field: IdentifierField) -> Any:
     """
     Enforce type correctness for a single identifier field.
     """
-
     if field.field_type == "string":
         if not isinstance(value, str):
             raise SchemaViolation(
@@ -142,10 +123,7 @@ def _coerce_field(value: Any, field: IdentifierField) -> Any:
     )
 
 
-def _normalize_identifier(
-    raw: Mapping[str, Any],
-    schema: ArtifactIdentifierSchema,
-) -> Tuple[Any, ...]:
+def _normalize_identifier(raw: Mapping[str, Any], schema: ArtifactIdentifierSchema) -> Tuple[Any, ...]:
     """
     Normalize and validate an identifier tuple against its schema.
 
@@ -154,9 +132,7 @@ def _normalize_identifier(
     - No field may have value "unknown"
     - Field types must match schema
     """
-
     values: List[Any] = []
-
     for field in schema.fields:
         if field.name not in raw:
             raise SchemaViolation(
@@ -164,7 +140,6 @@ def _normalize_identifier(
                 artifact_class=schema.artifact_class,
                 field_name=field.name,
             )
-
         value = raw[field.name]
 
         # 🚫 HARD FAIL: no placeholder identifiers allowed
@@ -201,7 +176,6 @@ class RepositorySnapshot:
     - non-placeholder
     - unique
     """
-
     artifacts: Dict[ArtifactClass, Tuple[SnapshotArtifact, ...]]
 
     # --------------------------------------------------------
@@ -236,25 +210,18 @@ class RepositorySnapshot:
 
                 raw_id = entry.get("identifierTuple")
                 if raw_id is None:
-                    raise SchemaViolation(
-                        "Missing identifierTuple",
-                        artifact_class=artifact_class,
-                    )
+                    raise SchemaViolation("Missing identifierTuple", artifact_class=artifact_class)
 
                 identifier = _normalize_identifier(raw_id, schema)
                 key = (artifact_class, identifier)
-
                 if key in seen:
                     raise DuplicateIdentifier(
                         "Duplicate identifier detected",
                         artifact_class=artifact_class,
                         identifier=identifier,
                     )
-
                 seen.add(key)
-                buckets[artifact_class].append(
-                    SnapshotArtifact(artifact_class, identifier)
-                )
+                buckets[artifact_class].append(SnapshotArtifact(artifact_class, identifier))
 
         # Freeze snapshot; drop empty classes deterministically
         frozen: Dict[ArtifactClass, Tuple[SnapshotArtifact, ...]] = {
@@ -290,7 +257,6 @@ class RepositorySnapshot:
         """
         Parse enumerator artifact class strings into canonical enums.
         """
-
         try:
             return ArtifactClass[raw]
         except KeyError:
