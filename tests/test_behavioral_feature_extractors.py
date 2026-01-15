@@ -9,10 +9,6 @@ from dataset.interaction_event import InteractionEvent
 
 
 def _make_simple_dataset() -> BenignDataset:
-    """
-    Build a minimal but valid dataset with timestamps
-    sufficient to exercise behavioral extractors.
-    """
     trace = InteractionTrace([
         InteractionEvent(
             timestamp=0.0,
@@ -38,12 +34,6 @@ def _make_simple_dataset() -> BenignDataset:
 
 
 def test_behavioral_feature_pipeline_runs():
-    """
-    Ensures behavioral feature extractors:
-    - integrate with FeatureExtractionPipeline
-    - accept BenignDataset
-    - return FeatureSet entries with correct keys
-    """
     dataset = _make_simple_dataset()
 
     pipeline = FeatureExtractionPipeline([
@@ -54,12 +44,24 @@ def test_behavioral_feature_pipeline_runs():
 
     feature_set = pipeline.run(dataset)
 
-    # Assert feature keys exist
+    # ---- OUTPUT ----
+    print("\n[INFO] Feature extraction completed")
+    print("[INFO] Extracted feature keys:")
+    for k in feature_set:
+        print(f"  - {k}: {feature_set[k]}")
+
+    # ---- ASSERTIONS ----
     assert "fsession_length" in feature_set
     assert "ft_intra_user_timing" in feature_set
     assert "faccess_transition_matrix" in feature_set
 
-    # Assert returned values are tuples (pipeline contract)
     assert isinstance(feature_set["fsession_length"], tuple)
     assert isinstance(feature_set["ft_intra_user_timing"], tuple)
     assert isinstance(feature_set["faccess_transition_matrix"], tuple)
+
+    print("\n[PASS] Behavioral feature pipeline test passed")
+
+
+# ✅ ENTRYPOINT FOR DIRECT EXECUTION
+if __name__ == "__main__":
+    test_behavioral_feature_pipeline_runs()
