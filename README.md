@@ -31,6 +31,13 @@ cd DeployStega
 python3 -m venv .venv
 source .venv/bin/activate
 ```
+
+#### If Virtual Environment Breaks:
+```bash
+deactivate
+```
+Repeat steps 1 and 2 again.
+
 ### 3. Build the Experiment Snapshot (Required, Once)
 Install python's requests package in your virtual environment:
 ```bash
