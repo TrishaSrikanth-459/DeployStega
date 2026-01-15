@@ -1,6 +1,6 @@
-from .session_length import SessionFeatureExtractor
-from .timing_delta import TimingFeatureExtractor
-from .artifact_transition import TransitionFeatureExtractor
+from .session import SessionFeatureExtractor
+from .timing import TimingFeatureExtractor
+from .transition import TransitionFeatureExtractor
 
 __all__ = [
     "SessionFeatureExtractor",
