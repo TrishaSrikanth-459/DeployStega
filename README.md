@@ -28,15 +28,21 @@ cd DeployStega
 ```
 ### 2. Create and Activate a Virtual Environment
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 ```
 ### 3. Build the Experiment Snapshot (Required, Once)
+Install python's requests package in your virtual environment:
+```bash
+pip install requests
+```
+
 All experiment initialization is performed by:
 ```bash
-python -m scripts.build_snapshot
+python3 -m scripts.build_snapshot
 ```
 This step fully initializes the experiment and must be completed before any sender or receiver runtime execution.
+
 
 During this step, the user is prompted to provide:
 
@@ -86,7 +92,7 @@ These identifiers:
 ### 6. Run the Dead-Drop Resolver (Runtime)
 Each participant independently runs:
 ```bash
-python -m scripts.interactive_dead_drop
+python3 -m scripts.interactive_dead_drop
 ```
 ## Console Flow:
 - Automatic wait until epoch origin (with countdown warning)
