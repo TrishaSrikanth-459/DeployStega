@@ -1,17 +1,28 @@
 """
+routing/behavioral_namespace.py
+
 Behavioral interpretation layer for DeployStega.
 
-Defines constraints and interpretations that operate on top of routing
-artifacts without redefining routing schema.
+This module defines:
+- behavioral constraints (allowed/forbidden/out-of-scope actions)
+- mappings useful for behavioral feature extraction
+
+IMPORTANT:
+- This file MUST NOT redefine routing ArtifactClass or identifier schemas.
+- Canonical routing schema lives in:
+  routing/dead_drop_function/repository_snapshot/schema.py
 """
 
+from __future__ import annotations
+
 from typing import FrozenSet, Dict
+
 from routing.dead_drop_function.repository_snapshot.schema import ArtifactClass
 
 
-# =========================
-# Identifier-Preserving Fields
-# =========================
+# -------------------------
+# Identifier-preserving fields
+# -------------------------
 
 IDENTIFIER_DEFINING_FIELDS: Dict[ArtifactClass, FrozenSet[str]] = {
     ArtifactClass.Repository: frozenset({"owner", "repo"}),
@@ -27,21 +38,20 @@ IDENTIFIER_DEFINING_FIELDS: Dict[ArtifactClass, FrozenSet[str]] = {
 }
 
 
-# =========================
-# Sender Behavioral Constraints
-# =========================
+# -------------------------
+# Behavioral constraints
+# -------------------------
 
 FORBIDDEN_SENDER_ACTIONS: FrozenSet[str] = frozenset({
-    "repository_rename",
-    "issue_transfer",
-    "pull_request_transfer",
     "issue_title_edit",
     "pull_request_title_edit",
     "release_title_edit",
     "label_name_edit",
     "milestone_title_edit",
+    "repository_rename",
+    "issue_transfer",
+    "pull_request_transfer",
 })
-
 
 ALLOWED_SENDER_ACTIONS: FrozenSet[str] = frozenset({
     "issue_body_edit",
@@ -67,7 +77,6 @@ ALLOWED_SENDER_ACTIONS: FrozenSet[str] = frozenset({
     "milestone_due_date_edit",
 })
 
-
 OUT_OF_SCOPE_ACTIONS: FrozenSet[str] = frozenset({
     "issue_create",
     "pull_request_create",
@@ -81,6 +90,27 @@ OUT_OF_SCOPE_ACTIONS: FrozenSet[str] = frozenset({
     "git_tag_delete",
     "label_delete",
     "milestone_delete",
+    "repository_rename",
     "repository_transfer",
+    "issue_transfer",
     "history_rewrite",
 })
+
+
+# -------------------------
+# Optional: GitHub event -> artifact class names
+# (ONLY if you actually ingest GitHub Events elsewhere)
+# -------------------------
+
+GITHUB_EVENT_TO_ARTIFACT_CLASS: Dict[str, str] = {
+    "IssuesEvent": "Issue",
+    "PullRequestEvent": "PullRequest",
+    "PushEvent": "Commit",
+    "CreateEvent": "Commit",
+    "IssueCommentEvent": "IssueComment",
+    "PullRequestReviewEvent": "PullRequestComment",
+    "PullRequestReviewCommentEvent": "PullRequestComment",
+    "CommitCommentEvent": "CommitComment",
+}
+
+ROUTING_NAMESPACE: FrozenSet[str] = frozenset(GITHUB_EVENT_TO_ARTIFACT_CLASS.keys())
