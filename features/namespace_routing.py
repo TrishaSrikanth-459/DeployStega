@@ -75,6 +75,9 @@ class Role(Enum):
     SENDER = "sender"
     RECEIVER = "receiver"
 
+#Epoch Type
+Epoch = int 
+
 # Identifier-Preserving Constraints - Fields that define identifiers (must NOT be modified)
 IDENTIFIER_DEFINING_FIELDS: Dict[str, FrozenSet[str]] = {
     "Issue": frozenset({"issue_number"}),
