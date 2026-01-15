@@ -194,27 +194,6 @@ According to our differential-privacy formulation, detectability is measured wit
 
 ---
 
-## Experimental Assumption (Collaborator Stability)
-
-For the duration of each DeployStega experiment, no pending invitations are accepted mid-experiment, and  
-**the only collaborators present throughout the experiment are the sender and the receiver.**
-
-This assumption ensures that:
-- All observed activity arises solely from the sender and receiver.
-- Sender interactions do not elicit social reactions from external third parties that may introduce unmodeled behavioral signals, secondary communication channels, or confounding activity traces.
-
-Examples of excluded social reactions include (but are not limited to):
-- A third party receiving notifications triggered by sender-authored comments or edits,
-- Replies, questions, or follow-up discussions initiated by external collaborators,
-- Edits, corrections, or rephrasings of sender-authored content by others,
-- References to sender activity in subsequent issues, pull requests, or reviews,
-- Off-platform communication (e.g., Slack or email) triggered by sender actions,
-- Cascading interaction effects such as additional comments, reviews, or commits prompted by sender edits.
-
-In real-world repositories, collaborator churn and social engagement may occur due to organizational or interpersonal dynamics. Such events are treated as **out-of-scope conditions** for the routing model. This assumption is necessary to isolate platform-level detectability from uncontrolled social interference and to preserve the interpretability of empirical indistinguishability measurements.
-
----
-
 ## Detectability of Repository Population Characteristics
 
 **Throughout all DeployStega experiments, the sender and the receiver are the only repository collaborators.**  
