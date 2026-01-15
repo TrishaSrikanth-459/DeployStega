@@ -23,7 +23,7 @@ export GITHUB_TOKEN=YOUR_TOKEN_HERE
 ## Step-by-Step Usage
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com//DeployStega.git
+git clone https://github.com/TrishaSrikanth-459/DeployStega.git
 cd DeployStega
 ```
 ### 2. Create and Activate a Virtual Environment
