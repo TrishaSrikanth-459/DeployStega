@@ -36,13 +36,14 @@ source .venv/bin/activate
 ```bash
 deactivate
 ```
-Repeat steps 1 and 2 again.
+Repeat steps 1 and 2 again. A new virtual environment does not need to be created each time an experiment is run, unless the current virtual environment malfunctions.
 
 ### 3. Build the Experiment Snapshot (Required, Once)
 Install python's requests package in your virtual environment:
 ```bash
 pip install requests
 ```
+Package must be reinstalled every time ```.venv``` is deleted and recreated. 
 
 All experiment initialization is performed by:
 ```bash
