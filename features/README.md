@@ -22,37 +22,6 @@ capabilities used throughout DeployStega’s indistinguishability evaluation.
 
 ---
 
-## Directory Structure
-
-```mermaid
-flowchart TD
-    features["features/"]
-
-    features --> behavioural["behaviourial/"]
-    features --> routing["routing/"]
-
-    behavioural --> freq["frequency.py"]
-    behavioural --> revisit["revisit.py"]
-    behavioural --> session["session.py"]
-    behavioural --> timing["timing.py"]
-    behavioural --> transition["transition.py"]
-    behavioural --> namespace["namespace_routing.py"]
-
-    routing --> idconc["identifier_concentration.py"]
-    routing --> role["role_asymmetry.py"]
-    routing --> shared["shared_access.py"]
-    routing --> topo["shared_access_topology.py"]
----
-
-## Behavioral Features (`features/behaviourial/`)
-
-Behavioral features characterize **how users interact with the platform over
-time**, independent of semantic content. These features constitute the
-behavioral component of the adversary’s capability class,
-denoted \(F_{\text{behavioral}}\).
-
----
-
 ### `timing.py` — Intra-User Timing (`ft`)
 
 **Extracted quantity**  
