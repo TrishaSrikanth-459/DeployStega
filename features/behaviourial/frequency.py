@@ -8,15 +8,18 @@ from collections import defaultdict
 from features.extractor import FeatureExtractor
 from dataset.benign_dataset import BenignDataset
 from dataset.neighboring_dataset import NeighboringDataset
-from config import GITHUB_EVENT_TO_ARTIFACT_CLASS
+
+
+def _get_metadata(event, key: str):
+    for k, v in event.metadata:
+        if k == key:
+            return v
+    return None
 
 
 class FrequencyFeatureExtractor(FeatureExtractor):
     """
     Extracts artifact class frequency distribution for behavioral analysis.
-    
-    Counts how often each artifact class appears and normalizes to probabilities,
-    showing P(class) = proportion of actions interacting with that class.
     
     Aggregates frequencies across all users without preserving per-collaborator
     identity. The adversary cannot determine which users are performing stega
@@ -34,9 +37,6 @@ class FrequencyFeatureExtractor(FeatureExtractor):
         """
         Extract event type frequency distribution from dataset.
         
-        Maps event types to artifact classes, counts occurrences, and
-        normalizes to probabilities.
-        
         Args:
             dataset: Dataset containing user activity traces
             
@@ -50,12 +50,12 @@ class FrequencyFeatureExtractor(FeatureExtractor):
             trace = dataset.get_trace(user_idx)
 
             for event in trace:
-                artifact_class = GITHUB_EVENT_TO_ARTIFACT_CLASS.get(
-                    event.action_type,
-                    event.action_type
-                )
+                artifact_class = _get_metadata(event, "artifact_class")
+                
+                if artifact_class is None:
+                    continue
 
-                class_counts[artifact_class] += 1
+                class_counts[str(artifact_class)] += 1
                 total_events += 1
 
         if total_events == 0:
@@ -66,4 +66,4 @@ class FrequencyFeatureExtractor(FeatureExtractor):
                 for artifact_class, count in class_counts.items()
             }
 
-        return (frequency_dist,)
+        return (frequency_dist,) 
