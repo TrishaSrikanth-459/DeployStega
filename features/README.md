@@ -25,7 +25,7 @@ capabilities used throughout DeployStega’s indistinguishability evaluation.
 ### `timing.py` — Intra-User Timing (`ft`)
 
 **Extracted quantity**  
-The empirical distribution of inter-event time gaps (\(\Delta t\)) between
+The empirical distribution of inter-event time gaps $(\Delta t)$ between
 consecutive actions performed by the same user.
 
 **Rationale**  
