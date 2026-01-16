@@ -24,20 +24,24 @@ capabilities used throughout DeployStega’s indistinguishability evaluation.
 
 ## Directory Structure
 
-features/
-├── behaviourial/            # Behavioral (temporal and workflow) features
-│   ├── frequency.py
-│   ├── revisit.py
-│   ├── session.py
-│   ├── timing.py
-│   ├── transition.py
-│   └── namespace_routing.py
-└── routing/                # Routing and access-topology features
-    ├── identifier_concentration.py
-    ├── role_asymmetry.py
-    ├── shared_access.py
-    └── shared_access_topology.py
-    
+```mermaid
+flowchart TD
+    features["features/"]
+
+    features --> behavioural["behaviourial/"]
+    features --> routing["routing/"]
+
+    behavioural --> freq["frequency.py"]
+    behavioural --> revisit["revisit.py"]
+    behavioural --> session["session.py"]
+    behavioural --> timing["timing.py"]
+    behavioural --> transition["transition.py"]
+    behavioural --> namespace["namespace_routing.py"]
+
+    routing --> idconc["identifier_concentration.py"]
+    routing --> role["role_asymmetry.py"]
+    routing --> shared["shared_access.py"]
+    routing --> topo["shared_access_topology.py"]
 ---
 
 ## Behavioral Features (`features/behaviourial/`)
