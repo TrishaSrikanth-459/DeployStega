@@ -5,14 +5,14 @@
 
 ## 1. Purpose and Scope
 
-The **DeployStega Open Interaction Dataset** is an interaction dataset designed to support empirical research on **covert communication mediated by large language models (LLMs)** under **behavioral, routing, and semantic adversaries**.
+The **DeployStega Open Interaction Dataset** is a log-faithful interaction dataset designed to support empirical research on **covert communication mediated by large language models (LLMs)** under **behavioral, routing, and semantic adversaries**.
 
-The dataset is motivated by the observation that, in realistic enterprise and platform deployments, adversaries primarily observe **application and platform logs** (e.g., audit logs, access telemetry, routing metadata), rather than direct access to message bodies. Accordingly, the dataset represents **adversary-visible interaction traces**, capturing *when*, *how*, and *which artifacts* users interact with, while supporting **explicit, auditable linkage to semantic content** through stable references.
+The dataset is motivated by the observation that, in realistic enterprise and platform deployments, adversaries primarily observe **application- and platform-level logs** (e.g., audit logs, access telemetry, routing metadata), rather than direct access to complete message bodies. Accordingly, the dataset represents **adversary-visible interaction traces**, capturing *when*, *how*, and *which artifacts* users interact with, while embedding **semantic content directly within interaction metadata** when available.
 
 The dataset enables rigorous evaluation of:
 
-- **Behavioral-only adversaries** operating on interaction logs,
-- **Semantic-only adversaries** operating on textual artifacts, and
+- **Behavioral-only adversaries** operating exclusively on interaction logs,
+- **Semantic-only adversaries** operating on textual content embedded in events, and
 - **Cross-layer adversaries** combining behavioral and semantic information.
 
 The core research contribution is to demonstrate that **semantic-only steganalysis is suboptimal in realistic logging regimes**, and that **behavioral filtering can significantly reduce the cost of semantic inspection** by narrowing attention to a small subset of suspicious interactions.
@@ -23,9 +23,9 @@ The core research contribution is to demonstrate that **semantic-only steganalys
 
 ### 2.1 What external researchers receive
 
-External researchers are provided with a **complete, static dataset release**. They are **not required to run any code** from the DeployStega repository in order to use the dataset.
+External researchers are provided with a **complete, static dataset release**. They are **not required to run any code** from the DeployStega repository.
 
-The released dataset consists of **fully materialized data files**, described below, which can be loaded using standard JSON tooling.
+The released dataset consists of **fully materialized JSON files** that can be loaded using standard data-processing tools. All information required for behavioral, semantic, and cross-layer analysis is contained within the release.
 
 ---
 
@@ -35,11 +35,10 @@ A dataset release has the following structure:
 ```
 deploystega_open_dataset/
 ├── interaction_dataset.jsonl
-├── semantic_artifacts.jsonl
 └── dataset_index.json
 ```
 
-Each file has a precise and non-overlapping role.
+No additional semantic artifact files are required or provided. Semantic content, when present, is embedded directly within interaction events.
 
 ---
 
@@ -47,12 +46,15 @@ Each file has a precise and non-overlapping role.
 
 ### 4.1 File semantics
 
-- Each line corresponds to exactly one user
-- Each line contains a complete interaction trace
-- Events are time-ordered
-- Each trace has a mandatory label (benign or covert)
+- Each line corresponds to **exactly one user**
+- Each line contains a **complete interaction trace**
+- Events are **strictly time-ordered**
+- Each trace has a **mandatory label** (`benign` or `covert`)
+- Semantic content, if present, is embedded in event metadata
 
-This file represents exactly what a behavioral adversary observes.
+This file represents exactly what a behavioral adversary observes, augmented with semantic fields where available.
+
+---
 
 ### 4.2 Event structure
 
@@ -65,18 +67,23 @@ Each event corresponds to a single interaction, analogous to an application log 
   "metadata": {
     "artifact_class": "IssueComment",
     "role": "sender",
-    "semantic_ref": "issue_42_body_v3"
+    "semantic_content": "This is placeholder semantic text. THIS WILL BE REPLACED."
   }
 }
 ```
 
 **Interpretation of artifact_ids:**
 
-- `artifact_ids` is a structured identifier tuple
-- Its interpretation depends on `artifact_class`
-- Example: `["IssueComment", "repo_owner", "repo_name", 42]` uniquely identifies Issue #42.
+- `artifact_ids` is a structured, stable identifier tuple
+- The first element is the artifact class
+- Remaining elements uniquely identify the artifact instance
+- Example: `["IssueComment", "repo_owner", "repo_name", 42]` uniquely identifies Issue #42 in the repository
 
-### 4.3 Example trace (multiple events)
+---
+
+### 4.3 Example trace with multiple events
+
+Each line in `interaction_dataset.jsonl` represents a single user trace:
 ```json
 {
   "label": "covert",
@@ -88,7 +95,7 @@ Each event corresponds to a single interaction, analogous to an application log 
       "metadata": {
         "artifact_class": "IssueComment",
         "role": "sender",
-        "semantic_ref": "issue_42_body_v1"
+        "semantic_content": "Covert placeholder payload. TO BE REPLACED."
       }
     },
     {
@@ -98,56 +105,63 @@ Each event corresponds to a single interaction, analogous to an application log 
       "metadata": {
         "artifact_class": "IssueComment",
         "role": "receiver",
-        "semantic_ref": "issue_42_body_v1"
+        "semantic_content": "Same artifact viewed by receiver."
       }
     }
   ]
 }
 ```
 
+This structure mirrors realistic application logs while preserving sufficient structure for behavioral and semantic analysis.
+
 ---
 
-## 5. semantic_artifacts.jsonl (Semantic Content)
+## 5. Semantic Content: Representation and Rationale
 
-### 5.1 Purpose
+### 5.1 Embedded semantic content
 
-This file contains semantic artifacts referenced by interaction events. It enables semantic-only and cross-layer analysis.
+Semantic content is embedded directly within the `metadata` field of interaction events, under keys such as `semantic_content`.
 
-### 5.2 File semantics
+This design reflects scenarios in which adversaries may observe limited or partial textual content (e.g., comments, commit messages, issue bodies) through logs, snapshots, or audit trails.
 
-- Each line corresponds to exactly one semantic artifact, which corresponds to one event.
-- Artifacts are referenced via `semantic_ref`
-- Artifacts are explicitly labeled as benign or covert
+---
 
-### 5.3 Semantic artifact record format
-```json
-{
-  "semantic_ref": "issue_42_body_v3",
-  "artifact_class": "IssueComment",
-  "artifact_ids": ["repo_owner", "repo_name", 42],
-  "label": "covert",
-  "content": "This is placeholder text containing steganographic payload. THIS WILL BE REPLACED.",
-  "content_type": "text/plain"
-}
-```
+### 5.2 Placeholder content
+
+In the current release, semantic fields may contain placeholder text. These placeholders are explicitly marked and exist to validate the end-to-end dataset structure. In experimental runs, they are replaced with real benign or steganographic content.
 
 ---
 
 ## 6. dataset_index.json (Dataset Metadata)
 
-This file provides dataset-level metadata required for reproducibility:
+The `dataset_index.json` file provides dataset-level metadata required for reproducibility and evaluation.
+
+**Example:**
 ```json
 {
-  "num_users": 100,
-  "num_traces": 100,
-  "num_events": 4821,
-  "labels": {
-    "benign": 98,
-    "covert": 2
+  "format_version": 1,
+  "output_files": {
+    "interaction_dataset": "interaction_dataset.jsonl",
+    "dataset_index": "dataset_index.json"
   },
-  "has_semantic_artifacts": true
+  "num_users": 2,
+  "num_events": 5,
+  "user_labels": {
+    "0": "covert",
+    "1": "benign"
+  },
+  "label_counts": {
+    "benign": 1,
+    "covert": 1
+  },
+  "label_schema": {
+    "benign": "No covert communication is present in this user's trace.",
+    "covert": "This user's trace contains covert activity by design (ground truth)."
+  }
 }
 ```
+
+Labels are explicit, mandatory, and unambiguous.
 
 ---
 
@@ -155,16 +169,14 @@ This file provides dataset-level metadata required for reproducibility:
 
 External researchers should proceed as follows:
 
-1. Load `interaction_dataset.jsonl` and `dataset_index.json` as a collection of user traces.
+1. Load `interaction_dataset.jsonl` and treat each line as a single user trace.
 
-2. Compute behavioral and routing features using interaction logs only.
+2. Compute behavioral and routing features using interaction logs.
 
 3. Train or evaluate behavioral detectors to flag suspicious traces or events.
 
-4. Load `semantic_artifacts.jsonl` and join on `semantic_ref`.
+4. Apply semantic analysis to embedded semantic fields only for behaviorally flagged interactions.
 
-5. Apply semantic analysis only to behaviorally flagged interactions.
+5. Measure detection performance and semantic inspection cost reduction.
 
-6. Measure detection performance and semantic inspection cost reduction.
-
-This workflow directly supports the dataset's intended contribution: **behavioral filtering as a cost-reduction mechanism for semantic steganalysis**.
+This workflow directly supports the dataset's intended contribution: **behavioral filtering as a principled cost-reduction mechanism for semantic steganalysis**.
