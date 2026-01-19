@@ -3,14 +3,11 @@ dataset/routing_trace_to_interaction.py
 
 Converts RoutingTraceRecord -> InteractionEvent -> InteractionTrace.
 
-Key design decision:
-- An InteractionEvent must represent what the adversary sees in logs.
-- We encode artifact identity as a tuple that is stable and extractor-friendly.
-
-artifact_ids format (recommended, stable):
-  (artifact_class, *identifier)
-
-We also include the concrete URL and routing fields in metadata (immutable).
+Design principles:
+- InteractionEvents must reflect adversary-visible logs
+- Semantic content (if present) is treated as flat log fields
+- No hidden payload objects
+- No inference or enrichment
 """
 
 from __future__ import annotations
@@ -52,17 +49,45 @@ class TimingPolicy:
 # ============================================================
 
 def _stable_artifact_ids(rec: RoutingTraceRecord) -> Tuple[Any, ...]:
+    """
+    Canonical artifact identity exposed to feature extractors.
+    """
     return (rec.artifact_class, *rec.identifier)
 
 
-def _stable_metadata(rec: RoutingTraceRecord) -> Tuple[Any, ...]:
-    return (
+def _stable_metadata(rec: RoutingTraceRecord) -> Tuple[Tuple[Any, Any], ...]:
+    """
+    Canonical adversary-visible metadata.
+
+    Includes routing + semantic fields if present.
+    """
+    meta: List[Tuple[Any, Any]] = [
         ("role", rec.role),
         ("epoch", rec.epoch),
         ("url", rec.url),
         ("action_type", rec.action_type),
         ("artifact_class", rec.artifact_class),
-    ) + tuple(rec.metadata)
+    ]
+
+    # Preserve any original metadata pairs
+    meta.extend(rec.metadata)
+
+    # --------------------------------------------------
+    # Embedded semantic fields (flat, optional)
+    # --------------------------------------------------
+    if rec.semantic_text is not None:
+        meta.append(("semantic_text", rec.semantic_text))
+
+    if rec.semantic_meaning is not None:
+        meta.append(("semantic_meaning", rec.semantic_meaning))
+
+    if rec.semantic_label is not None:
+        meta.append(("semantic_label", rec.semantic_label))
+
+    if rec.semantic_content_type is not None:
+        meta.append(("semantic_content_type", rec.semantic_content_type))
+
+    return tuple(meta)
 
 
 def _synthesize_timestamp(
@@ -97,11 +122,6 @@ def routing_record_to_event(
     """
     Convert a single RoutingTraceRecord into an InteractionEvent.
 
-    Used for:
-    - unit tests
-    - documentation
-    - sanity checking
-
     If rec.timestamp is None, timing_policy MUST be provided.
     """
 
@@ -124,10 +144,6 @@ def routing_record_to_event(
         action_type=rec.action_type,
         artifact_ids=_stable_artifact_ids(rec),
         metadata=_stable_metadata(rec),
-        semantic_ref=rec.semantic.semantic_ref if rec.semantic else None,
-        semantic_content=rec.semantic.content if rec.semantic else None,
-        semantic_label=rec.semantic.label if rec.semantic else None,
-        semantic_type=rec.semantic.content_type if rec.semantic else None,
     )
 
 
@@ -146,7 +162,7 @@ def records_to_events_by_user(
 
     user_key:
       - "role"       → users are "sender", "receiver"
-      - "role_epoch" → users are "sender:epoch", etc.
+      - "role_epoch" → users are "sender:epoch"
     """
 
     buckets: DefaultDict[str, List[RoutingTraceRecord]] = defaultdict(list)
@@ -167,7 +183,7 @@ def records_to_events_by_user(
     out: Dict[str, Tuple[InteractionEvent, ...]] = {}
 
     for user, recs in buckets.items():
-        # Deterministic ordering
+
         def sort_key(r: RoutingTraceRecord) -> Tuple[Any, ...]:
             t = r.timestamp if r.timestamp is not None else float("inf")
             return (t, r.epoch, r.stable_key())
@@ -184,6 +200,7 @@ def records_to_events_by_user(
             by_epoch[r.epoch].append(idx)
 
         events: List[InteractionEvent] = []
+
         for idx, r in enumerate(recs_sorted):
             if r.timestamp is not None:
                 ts = float(r.timestamp)
@@ -223,10 +240,10 @@ def records_to_events_by_user(
 def events_to_traces(
     events_by_user: Dict[str, Tuple[InteractionEvent, ...]]
 ) -> Dict[str, InteractionTrace]:
-    traces: Dict[str, InteractionTrace] = {}
-    for user, events in events_by_user.items():
-        traces[user] = InteractionTrace(events)
-    return traces
+    return {
+        user: InteractionTrace(events)
+        for user, events in events_by_user.items()
+    }
 
 
 # ============================================================
