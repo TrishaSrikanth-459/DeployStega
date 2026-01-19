@@ -155,7 +155,7 @@ This file provides dataset-level metadata required for reproducibility:
 
 External researchers should proceed as follows:
 
-1. Load `interaction_dataset.jsonl` as a collection of user traces.
+1. Load `interaction_dataset.jsonl` and `dataset_index.json` as a collection of user traces.
 
 2. Compute behavioral and routing features using interaction logs only.
 
