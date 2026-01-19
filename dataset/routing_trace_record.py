@@ -1,18 +1,26 @@
 """
 dataset/routing_trace_record.py
 
-Defines a canonical, minimal routing-trace record and a JSONL loader.
+Defines the canonical routing-trace record used as the single source of truth
+for DeployStega experiments and dataset export.
 
-This module is intentionally "dumb I/O":
-- parse JSONL lines
-- validate required fields
-- normalize identifier types
-- return immutable records
+This module is intentionally minimal and log-faithful.
+
+A routing trace represents adversary-visible platform logs. It may optionally
+carry references to semantic artifacts (or inline semantic payloads) when
+explicitly enabled by the experiment.
+
+This module:
+- Parses JSONL routing traces
+- Validates required fields
+- Normalizes identifiers
+- Preserves real timestamps
+- Cleanly supports semantic payload linkage
 
 It does NOT:
-- construct InteractionEvents
-- build datasets
-- infer timing unless explicitly configured
+- Construct InteractionEvents
+- Infer timing
+- Perform feature extraction
 """
 
 from __future__ import annotations
@@ -23,13 +31,38 @@ import json
 
 
 # ============================================================
-# Core record
+# Semantic payload (optional, explicit)
+# ============================================================
+
+@dataclass(frozen=True)
+class SemanticPayload:
+    """
+    Explicit semantic content associated with a routing event.
+
+    This payload is optional and only present when the sender modifies
+    or accesses semantic artifacts (e.g., issue body, PR comment, commit message).
+
+    Fields:
+      - semantic_ref: stable identifier used to link events and artifacts
+      - content: raw semantic text (stego or benign)
+      - label: "covert" | "benign"
+      - content_type: descriptive string (e.g., issue_body, pr_comment)
+    """
+
+    semantic_ref: str
+    content: str
+    label: str
+    content_type: str
+
+
+# ============================================================
+# Core routing record
 # ============================================================
 
 @dataclass(frozen=True)
 class RoutingTraceRecord:
     """
-    One routing decision / action emission as logged by the routing layer.
+    One routing-layer interaction as emitted by the DeployStega resolver.
 
     Required:
       - role: "sender" | "receiver"
@@ -42,7 +75,8 @@ class RoutingTraceRecord:
       - experiment_id: str
       - timestamp: float (unix seconds)
       - action_type: str
-      - metadata: tuple[Any, ...]
+      - metadata: tuple[(key, value), ...]
+      - semantic: SemanticPayload (explicit semantic content, if any)
     """
 
     role: str
@@ -54,11 +88,12 @@ class RoutingTraceRecord:
     experiment_id: Optional[str] = None
     timestamp: Optional[float] = None
     action_type: str = "route_access"
-    metadata: Tuple[Any, ...] = ()
+    metadata: Tuple[Tuple[Any, Any], ...] = ()
+    semantic: Optional[SemanticPayload] = None
 
     def stable_key(self) -> Tuple[Any, ...]:
         """
-        Deterministic tie-break key used for sorting and reproducibility.
+        Deterministic ordering key for reproducibility.
         """
         return (
             self.experiment_id,
@@ -70,6 +105,7 @@ class RoutingTraceRecord:
             self.timestamp if self.timestamp is not None else -1.0,
             self.action_type,
             self.metadata,
+            self.semantic.semantic_ref if self.semantic else None,
         )
 
 
@@ -93,6 +129,29 @@ def _coerce_identifier(value: Any) -> Tuple[Any, ...]:
     )
 
 
+def _parse_semantic(obj: Dict[str, Any]) -> Optional[SemanticPayload]:
+    """
+    Parse optional semantic payload if present.
+    """
+    semantic_obj = obj.get("semantic")
+    if semantic_obj is None:
+        return None
+
+    if not isinstance(semantic_obj, dict):
+        raise TypeError("semantic field must be an object")
+
+    return SemanticPayload(
+        semantic_ref=str(_require(semantic_obj, "semantic_ref")),
+        content=str(_require(semantic_obj, "content")),
+        label=str(_require(semantic_obj, "label")),
+        content_type=str(_require(semantic_obj, "content_type")),
+    )
+
+
+# ============================================================
+# Record parser
+# ============================================================
+
 def parse_routing_trace_line(obj: Dict[str, Any]) -> RoutingTraceRecord:
     """
     Parse and validate a single JSON object into a RoutingTraceRecord.
@@ -106,14 +165,10 @@ def parse_routing_trace_line(obj: Dict[str, Any]) -> RoutingTraceRecord:
     if not isinstance(epoch, int) or epoch < 0:
         raise ValueError(f"Invalid epoch in routing trace: {epoch}")
 
-    # Accept both snake_case and legacy camelCase
     artifact_class = obj.get("artifact_class", obj.get("artifactClass"))
     if artifact_class is None:
-        raise ValueError("RoutingTraceRecord missing required field: artifact_class")
-
+        raise ValueError("Missing required field: artifact_class")
     artifact_class = str(artifact_class).strip()
-    if not artifact_class:
-        raise ValueError("artifact_class must be non-empty")
 
     identifier = _coerce_identifier(_require(obj, "identifier"))
 
@@ -128,7 +183,7 @@ def parse_routing_trace_line(obj: Dict[str, Any]) -> RoutingTraceRecord:
     timestamp = obj.get("timestamp")
     if timestamp is not None:
         if not isinstance(timestamp, (int, float)):
-            raise TypeError("timestamp must be int or float if provided")
+            raise TypeError("timestamp must be numeric")
         timestamp = float(timestamp)
 
     action_type = obj.get("action_type", "route_access")
@@ -136,13 +191,15 @@ def parse_routing_trace_line(obj: Dict[str, Any]) -> RoutingTraceRecord:
 
     metadata_raw = obj.get("metadata", ())
     if metadata_raw is None:
-        metadata = ()
+        metadata: Tuple[Tuple[Any, Any], ...] = ()
+    elif isinstance(metadata_raw, list):
+        metadata = tuple(tuple(pair) for pair in metadata_raw)
     elif isinstance(metadata_raw, tuple):
         metadata = metadata_raw
-    elif isinstance(metadata_raw, list):
-        metadata = tuple(metadata_raw)
     else:
-        metadata = (metadata_raw,)
+        raise TypeError("metadata must be list or tuple of pairs")
+
+    semantic = _parse_semantic(obj)
 
     return RoutingTraceRecord(
         role=role,
@@ -154,6 +211,7 @@ def parse_routing_trace_line(obj: Dict[str, Any]) -> RoutingTraceRecord:
         timestamp=timestamp,
         action_type=action_type,
         metadata=metadata,
+        semantic=semantic,
     )
 
 
