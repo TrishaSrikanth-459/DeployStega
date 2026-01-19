@@ -143,7 +143,7 @@ This separation enables:
 - **Behavioral-only evaluation** using interaction logs,
 - **Semantic-only evaluation** using text artifacts,
 - **Cross-layer evaluation** by joining on `semantic_ref`.
-- 
+
 ---
 
 ## 7. Timestamps and Temporal Fidelity
