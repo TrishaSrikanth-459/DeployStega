@@ -1,0 +1,121 @@
+{
+  "experiment_id": "deploystega-1768659341",
+  "built_at_unix": 1768659306,
+  "artifacts": {
+    "Repository": [
+      {
+        "artifactClass": "Repository",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test"
+        ]
+      }
+    ],
+    "Issue": [
+      {
+        "artifactClass": "Issue",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          5
+        ]
+      },
+      {
+        "artifactClass": "Issue",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          3
+        ]
+      },
+      {
+        "artifactClass": "Issue",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          1
+        ]
+      }
+    ],
+    "IssueComment": [
+      {
+        "artifactClass": "IssueComment",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          5
+        ]
+      },
+      {
+        "artifactClass": "IssueComment",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          3
+        ]
+      },
+      {
+        "artifactClass": "IssueComment",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          1
+        ]
+      }
+    ],
+    "PullRequest": [
+      {
+        "artifactClass": "PullRequest",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          4
+        ]
+      },
+      {
+        "artifactClass": "PullRequest",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          2
+        ]
+      }
+    ],
+    "PullRequestComment": [
+      {
+        "artifactClass": "PullRequestComment",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          4
+        ]
+      },
+      {
+        "artifactClass": "PullRequestComment",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          2
+        ]
+      }
+    ],
+    "Commit": [
+      {
+        "artifactClass": "Commit",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          "a7457de1c86ea8f0eb922923a377cb46085496b4"
+        ]
+      },
+      {
+        "artifactClass": "Commit",
+        "identifier": [
+          "TrishaSrikanth-459",
+          "DeployStega_Test",
+          "f70859f6e40f206aeaf55592fffcca18ae9730cc"
+        ]
+      }
+    ]
+  }
+}
