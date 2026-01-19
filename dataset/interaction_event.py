@@ -1,26 +1,72 @@
+"""
+dataset/interaction_event.py
+
+Defines the atomic unit observed by the adversary.
+
+An InteractionEvent represents a *single log-visible interaction* enriched
+with optional semantic payloads when explicitly enabled by the experiment.
+
+Design principles:
+- Faithful to application logs
+- Deterministic
+- Feature-extractor friendly
+- Semantic content is OPTIONAL but FIRST-CLASS
+"""
+
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
+
 
 @dataclass(frozen=True)
 class InteractionEvent:
     """
-    Atomic, immutable record of a single user action as it would appear in platform logs.
+    One adversary-visible interaction event.
 
-    This is the smallest observable unit in the system. It carries no interpretation, aggregation,
-    or security semantics.
+    Required:
+      - timestamp: float (unix seconds)
+      - action_type: str
+      - artifact_ids: tuple[Any, ...]
+
+    Optional:
+      - metadata: tuple[(key, value), ...]
+      - semantic_ref: opaque identifier linking to semantic artifact
+      - semantic_content: raw semantic text (if included)
+      - semantic_label: "benign" | "covert"
+      - semantic_type: descriptive tag (e.g., issue_body, pr_comment)
     """
 
-    # Absolute timestamp at which the action occurred, in UNIX time
     timestamp: float
-
-    # Categorical label describing the action
     action_type: str
-
-    # Tuple of artifact identifiers accessed or affected by the action.
-    # The structure and meaning of identifiers is application-specific
     artifact_ids: Tuple[Any, ...]
 
-    # Optional auxiliary fields (e.g., action specific attributes)
-    # Stored as an immutable tuple to preserve hashability
-    metadata: Tuple[Any, ...] = ()
+    metadata: Tuple[Tuple[Any, Any], ...] = ()
 
+    # -------------------------------
+    # Semantic payload (optional)
+    # -------------------------------
+    semantic_ref: Optional[str] = None
+    semantic_content: Optional[str] = None
+    semantic_label: Optional[str] = None
+    semantic_type: Optional[str] = None
+
+    # -------------------------------
+    # Convenience helpers
+    # -------------------------------
+
+    def has_semantic(self) -> bool:
+        return self.semantic_ref is not None
+
+    def semantic_tuple(self) -> Optional[Tuple[str, str, str, str]]:
+        """
+        Returns a stable semantic tuple if semantic content exists.
+        """
+        if not self.has_semantic():
+            return None
+        return (
+            self.semantic_ref,
+            self.semantic_type or "",
+            self.semantic_label or "",
+            self.semantic_content or "",
+        )
