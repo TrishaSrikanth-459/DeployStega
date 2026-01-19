@@ -124,6 +124,10 @@ def routing_record_to_event(
         action_type=rec.action_type,
         artifact_ids=_stable_artifact_ids(rec),
         metadata=_stable_metadata(rec),
+        semantic_ref=rec.semantic.semantic_ref if rec.semantic else None,
+        semantic_content=rec.semantic.content if rec.semantic else None,
+        semantic_label=rec.semantic.label if rec.semantic else None,
+        semantic_type=rec.semantic.content_type if rec.semantic else None,
     )
 
 
