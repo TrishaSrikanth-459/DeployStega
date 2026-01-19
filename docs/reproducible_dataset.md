@@ -148,7 +148,7 @@ This separation enables:
 
 ## 7. Timestamps and Temporal Fidelity
 
-The released dataset uses real UNIX timestamps derived from logged interactions. This enables faithful evaluation of:
+The released dataset uses real UNIX timestamps derived from logged interactions during experiments. This enables faithful evaluation of:
 
 - Intra-user timing distributions,
 - Session segmentation and session lengths,
