@@ -34,6 +34,7 @@ from typing import Dict, List, Any
 
 from routing.dead_drop_function.repository_snapshot.schema import ArtifactClass
 
+
 # ============================================================
 # Constants
 # ============================================================
@@ -86,6 +87,44 @@ def paginated_get(url: str) -> List[Dict[str, Any]]:
 
 def generate_id() -> str:
     return secrets.token_hex(16)
+
+
+def _parse_unix_timestamp_seconds(raw: str, *, field_name: str) -> int:
+    """
+    Parse UNIX timestamps robustly.
+
+    Accepts:
+      - seconds (e.g. 1769111958)
+      - milliseconds (e.g. 1769111958000) → auto-converted
+    """
+    s = raw.strip()
+    if not s:
+        raise RuntimeError(f"{field_name} is required (non-empty).")
+
+    try:
+        value = int(s)
+    except ValueError as e:
+        raise RuntimeError(
+            f"{field_name} must be an integer UNIX timestamp. Got: {raw!r}"
+        ) from e
+
+    # If value is clearly milliseconds, convert to seconds
+    if value >= 10_000_000_000:  # ≥ 1e10 → milliseconds
+        value //= 1000
+
+    return value
+
+
+def _fmt_delta(seconds: int) -> str:
+    sign = "-" if seconds < 0 else "+"
+    seconds = abs(seconds)
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{sign}{h}h {m}m {s}s"
+    if m:
+        return f"{sign}{m}m {s}s"
+    return f"{sign}{s}s"
 
 
 # ============================================================
@@ -152,28 +191,70 @@ def main() -> None:
     owner = input("GitHub owner/org: ").strip()
     repo = input("Repository name: ").strip()
 
-    now = int(time.time())
+    # Single, stable time reference
+    built_at_unix = int(time.time())
+    now_reference = built_at_unix
 
-    epoch_origin = int(input("Epoch origin UNIX time: ").strip())
-    if epoch_origin < now + MIN_EPOCH_OFFSET_SECONDS:
+    min_epoch_origin = now_reference + MIN_EPOCH_OFFSET_SECONDS
+
+    print("\n--- Epoch configuration ---")
+    print(f"Current UNIX time (seconds): {now_reference}")
+    print(
+        f"Minimum allowed epoch origin: {min_epoch_origin} "
+        f"(now + {MIN_EPOCH_OFFSET_SECONDS}s)"
+    )
+    print("Tip: You can paste seconds OR milliseconds; milliseconds will be auto-converted.\n")
+
+    # ----------------------------
+    # Epoch origin
+    # ----------------------------
+    epoch_origin = _parse_unix_timestamp_seconds(
+        input("Epoch origin UNIX time: "),
+        field_name="Epoch origin UNIX time",
+    )
+
+    if epoch_origin < min_epoch_origin:
         raise RuntimeError(
-            "Epoch origin must be at least 5 minutes in the future "
-            "relative to build_snapshot execution."
+            "Epoch origin must be at least 5 minutes in the future.\n"
+            f"  required_min_origin   = {min_epoch_origin}\n"
+            f"  provided_epoch_origin = {epoch_origin}\n"
+            f"  delta                 = {_fmt_delta(epoch_origin - min_epoch_origin)}\n"
         )
 
-    epoch_end = int(input("Epoch end UNIX time: ").strip())
-    if epoch_end <= epoch_origin + MIN_EPOCH_OFFSET_SECONDS:
+    # ----------------------------
+    # Epoch end
+    # ----------------------------
+    min_epoch_end = epoch_origin + MIN_EPOCH_OFFSET_SECONDS
+
+    print(
+        f"\nMinimum allowed epoch end: {min_epoch_end} "
+        f"(epoch origin + {MIN_EPOCH_OFFSET_SECONDS}s)"
+    )
+
+    epoch_end = _parse_unix_timestamp_seconds(
+        input("Epoch end UNIX time: "),
+        field_name="Epoch end UNIX time",
+    )
+
+    if epoch_end < min_epoch_end:
         raise RuntimeError(
-            "Epoch end must be at least 5 minutes after epoch origin."
+            "Epoch end must be at least 5 minutes after epoch origin.\n"
+            f"  epoch_origin        = {epoch_origin}\n"
+            f"  required_min_end    = {min_epoch_end}\n"
+            f"  provided_epoch_end  = {epoch_end}\n"
+            f"  delta               = {_fmt_delta(epoch_end - min_epoch_end)}\n"
         )
 
+    # ----------------------------
+    # Snapshot + manifest
+    # ----------------------------
     artifacts = build_snapshot(owner, repo)
 
-    experiment_id = f"deploystega-{int(time.time())}"
+    experiment_id = f"deploystega-{built_at_unix}"
 
     snapshot = {
         "experiment_id": experiment_id,
-        "built_at_unix": now,
+        "built_at_unix": built_at_unix,
         "artifacts": artifacts,
     }
 
@@ -202,6 +283,11 @@ def main() -> None:
     print(f"Snapshot      : {SNAPSHOT_PATH}")
     print(f"Manifest      : {MANIFEST_PATH}")
 
+    print("\n🕒 Epoch times (seconds):")
+    print(f"Origin UNIX   : {epoch_origin}")
+    print(f"End UNIX      : {epoch_end}")
+    print(f"Origin is     : {_fmt_delta(epoch_origin - now_reference)} from now")
+
     print("\n🔐 Participant IDs (share privately):")
     print(f"Sender ID   : {manifest['participants']['sender']['id']}")
     print(f"Receiver ID : {manifest['participants']['receiver']['id']}")
@@ -212,4 +298,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
