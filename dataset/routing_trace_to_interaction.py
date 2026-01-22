@@ -1,15 +1,3 @@
-"""
-dataset/routing_trace_to_interaction.py
-
-Converts RoutingTraceRecord -> InteractionEvent -> InteractionTrace.
-
-Design principles:
-- InteractionEvents must reflect adversary-visible logs
-- Semantic content (if present) is treated as flat log fields
-- No hidden payload objects
-- No inference or enrichment
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -21,73 +9,40 @@ from dataset.interaction_trace import InteractionTrace
 from dataset.routing_trace_record import RoutingTraceRecord
 
 
-# ============================================================
-# Timing policy (deterministic scaffolding only)
-# ============================================================
-
 @dataclass(frozen=True)
 class TimingPolicy:
-    """
-    If routing trace lines do NOT include timestamps, we deterministically synthesize them.
-
-    timestamp =
-        epoch_origin_unix
-        + epoch * epoch_duration_seconds
-        + per_record_offset
-
-    NOTE:
-    - This is NOT a behavioral model.
-    - This is deterministic scaffolding so traces are well-formed.
-    """
     epoch_origin_unix: int
     epoch_duration_seconds: int
     spread_within_epoch_seconds: float = 0.0
 
 
-# ============================================================
-# Internal helpers
-# ============================================================
-
 def _stable_artifact_ids(rec: RoutingTraceRecord) -> Tuple[Any, ...]:
-    """
-    Canonical artifact identity exposed to feature extractors.
-    """
     return (rec.artifact_class, *rec.identifier)
 
 
-def _stable_metadata(rec: RoutingTraceRecord) -> Tuple[Tuple[Any, Any], ...]:
-    """
-    Canonical adversary-visible metadata.
-
-    Includes routing + semantic fields if present.
-    """
-    meta: List[Tuple[Any, Any]] = [
+def _stable_metadata(rec: RoutingTraceRecord) -> Tuple[Any, ...]:
+    # Keep routing fields immutable + include semantic payload if present.
+    base = (
         ("role", rec.role),
         ("epoch", rec.epoch),
         ("url", rec.url),
         ("action_type", rec.action_type),
         ("artifact_class", rec.artifact_class),
-    ]
+    )
 
-    # Preserve any original metadata pairs
-    meta.extend(rec.metadata)
-
-    # --------------------------------------------------
-    # Embedded semantic fields (flat, optional)
-    # --------------------------------------------------
+    semantic_part: Tuple[Tuple[Any, Any], ...] = ()
+    if rec.semantic_ref is not None:
+        semantic_part += (("semantic_ref", rec.semantic_ref),)
     if rec.semantic_text is not None:
-        meta.append(("semantic_text", rec.semantic_text))
-
+        semantic_part += (("semantic_text", rec.semantic_text),)
     if rec.semantic_meaning is not None:
-        meta.append(("semantic_meaning", rec.semantic_meaning))
-
+        semantic_part += (("semantic_meaning", rec.semantic_meaning),)
     if rec.semantic_label is not None:
-        meta.append(("semantic_label", rec.semantic_label))
-
+        semantic_part += (("semantic_label", rec.semantic_label),)
     if rec.semantic_content_type is not None:
-        meta.append(("semantic_content_type", rec.semantic_content_type))
+        semantic_part += (("semantic_content_type", rec.semantic_content_type),)
 
-    return tuple(meta)
+    return base + tuple(rec.metadata) + semantic_part
 
 
 def _synthesize_timestamp(
@@ -96,21 +51,12 @@ def _synthesize_timestamp(
     index_within_bucket: int,
     bucket_size: int,
 ) -> float:
-    base = float(
-        policy.epoch_origin_unix
-        + rec.epoch * policy.epoch_duration_seconds
-    )
-
+    base = float(policy.epoch_origin_unix + rec.epoch * policy.epoch_duration_seconds)
     if policy.spread_within_epoch_seconds <= 0.0 or bucket_size <= 1:
         return base
-
     frac = index_within_bucket / max(1, bucket_size - 1)
     return base + frac * float(policy.spread_within_epoch_seconds)
 
-
-# ============================================================
-# Record → Event (atomic adapter)
-# ============================================================
 
 def routing_record_to_event(
     rec: RoutingTraceRecord,
@@ -119,24 +65,13 @@ def routing_record_to_event(
     index_within_bucket: int = 0,
     bucket_size: int = 1,
 ) -> InteractionEvent:
-    """
-    Convert a single RoutingTraceRecord into an InteractionEvent.
-
-    If rec.timestamp is None, timing_policy MUST be provided.
-    """
-
     if rec.timestamp is not None:
         ts = float(rec.timestamp)
     else:
         if timing_policy is None:
-            raise ValueError(
-                "RoutingTraceRecord has no timestamp; timing_policy required"
-            )
+            raise ValueError("RoutingTraceRecord has no timestamp; timing_policy required")
         ts = _synthesize_timestamp(
-            timing_policy,
-            rec,
-            index_within_bucket=index_within_bucket,
-            bucket_size=bucket_size,
+            timing_policy, rec, index_within_bucket=index_within_bucket, bucket_size=bucket_size
         )
 
     return InteractionEvent(
@@ -147,24 +82,12 @@ def routing_record_to_event(
     )
 
 
-# ============================================================
-# Records → Events (per user)
-# ============================================================
-
 def records_to_events_by_user(
     *,
     records: Iterable[RoutingTraceRecord],
     user_key: str = "role",
     timing_policy: Optional[TimingPolicy] = None,
 ) -> Dict[str, Tuple[InteractionEvent, ...]]:
-    """
-    Convert routing trace records into per-user InteractionEvent tuples.
-
-    user_key:
-      - "role"       → users are "sender", "receiver"
-      - "role_epoch" → users are "sender:epoch"
-    """
-
     buckets: DefaultDict[str, List[RoutingTraceRecord]] = defaultdict(list)
 
     for rec in records:
@@ -174,7 +97,6 @@ def records_to_events_by_user(
             key = f"{rec.role}:{rec.epoch}"
         else:
             raise ValueError(f"Unsupported user_key: {user_key}")
-
         buckets[key].append(rec)
 
     if not buckets:
@@ -183,7 +105,6 @@ def records_to_events_by_user(
     out: Dict[str, Tuple[InteractionEvent, ...]] = {}
 
     for user, recs in buckets.items():
-
         def sort_key(r: RoutingTraceRecord) -> Tuple[Any, ...]:
             t = r.timestamp if r.timestamp is not None else float("inf")
             return (t, r.epoch, r.stable_key())
@@ -191,16 +112,13 @@ def records_to_events_by_user(
         recs_sorted = sorted(recs, key=sort_key)
 
         if any(r.timestamp is None for r in recs_sorted) and timing_policy is None:
-            raise ValueError(
-                "Routing trace contains records without timestamps; timing_policy required"
-            )
+            raise ValueError("Routing trace contains records without timestamps; timing_policy required")
 
         by_epoch: DefaultDict[int, List[int]] = defaultdict(list)
         for idx, r in enumerate(recs_sorted):
             by_epoch[r.epoch].append(idx)
 
         events: List[InteractionEvent] = []
-
         for idx, r in enumerate(recs_sorted):
             if r.timestamp is not None:
                 ts = float(r.timestamp)
@@ -208,10 +126,7 @@ def records_to_events_by_user(
                 indices = by_epoch[r.epoch]
                 pos = indices.index(idx)
                 ts = _synthesize_timestamp(
-                    timing_policy,
-                    r,
-                    index_within_bucket=pos,
-                    bucket_size=len(indices),
+                    timing_policy, r, index_within_bucket=pos, bucket_size=len(indices)
                 )
 
             events.append(
@@ -223,32 +138,15 @@ def records_to_events_by_user(
                 )
             )
 
-        events_sorted = sorted(
-            events,
-            key=lambda e: (e.timestamp, e.action_type, e.artifact_ids, e.metadata),
-        )
-
+        events_sorted = sorted(events, key=lambda e: (e.timestamp, e.action_type, e.artifact_ids, e.metadata))
         out[user] = tuple(events_sorted)
 
     return out
 
 
-# ============================================================
-# Events → Traces
-# ============================================================
+def events_to_traces(events_by_user: Dict[str, Tuple[InteractionEvent, ...]]) -> Dict[str, InteractionTrace]:
+    return {user: InteractionTrace(events) for user, events in events_by_user.items()}
 
-def events_to_traces(
-    events_by_user: Dict[str, Tuple[InteractionEvent, ...]]
-) -> Dict[str, InteractionTrace]:
-    return {
-        user: InteractionTrace(events)
-        for user, events in events_by_user.items()
-    }
-
-
-# ============================================================
-# Public entry points
-# ============================================================
 
 def build_interaction_traces(
     *,
@@ -256,36 +154,5 @@ def build_interaction_traces(
     user_key: str = "role",
     timing_policy: Optional[TimingPolicy] = None,
 ) -> Dict[str, InteractionTrace]:
-    """
-    Canonical conversion entry point:
-        RoutingTraceRecord* → InteractionTrace per user
-    """
-    events_by_user = records_to_events_by_user(
-        records=records,
-        user_key=user_key,
-        timing_policy=timing_policy,
-    )
+    events_by_user = records_to_events_by_user(records=records, user_key=user_key, timing_policy=timing_policy)
     return events_to_traces(events_by_user)
-
-
-def build_interaction_trace(
-    *,
-    records: Iterable[RoutingTraceRecord],
-    user_key: str = "role",
-    timing_policy: Optional[TimingPolicy] = None,
-) -> InteractionTrace:
-    """
-    Convenience wrapper for cases where exactly ONE InteractionTrace is expected.
-    """
-    traces = build_interaction_traces(
-        records=records,
-        user_key=user_key,
-        timing_policy=timing_policy,
-    )
-
-    if len(traces) != 1:
-        raise ValueError(
-            f"Expected exactly one InteractionTrace, got {len(traces)}"
-        )
-
-    return next(iter(traces.values()))
