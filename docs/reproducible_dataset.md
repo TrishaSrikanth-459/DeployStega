@@ -1,13 +1,13 @@
-# DeployStega Open Interaction Dataset  
+# DeployStega-Bench
 **Specification and Research Usage Guide**
 
 ---
 
 ## 1. Purpose and Scope
 
-The **DeployStega Open Interaction Dataset** is a log-faithful interaction dataset designed to support empirical research on **covert communication mediated by large language models (LLMs)** under **behavioral, routing, and semantic adversaries**.
+The **DeployStega-Bench** is a log-faithful interaction dataset designed to support empirical research on **covert communication mediated by large language models (LLMs)** under **behavioral, routing, and semantic adversaries**.
 
-The dataset is motivated by the observation that, in realistic enterprise and platform deployments, adversaries primarily observe **application- and platform-level logs** (e.g., audit logs, access telemetry, routing metadata), rather than direct access to complete message bodies. Accordingly, the dataset represents **adversary-visible interaction traces**, capturing *when*, *how*, and *which artifacts* users interact with, while embedding **semantic content directly within interaction metadata** when available.
+The dataset is motivated by the observation that, in realistic enterprise and platform deployments, adversaries primarily observe **application- and platform-level logs** (e.g., audit logs, access telemetry, routing metadata). Accordingly, the dataset represents **adversary-visible interaction traces**, capturing *when*, *how*, and *which artifacts* users interact with, while embedding **semantic content directly within interaction metadata** when available.
 
 The dataset enables rigorous evaluation of:
 
