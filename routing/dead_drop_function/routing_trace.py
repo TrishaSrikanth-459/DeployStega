@@ -4,7 +4,7 @@ import json
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Sequence, Literal
+from typing import Any, Sequence, Literal, Optional, Dict
 
 Role = Literal["sender", "receiver"]
 
@@ -18,6 +18,13 @@ class RoutingTraceEvent:
     artifact_class: str
     identifier: list[Any]
     url: str
+
+    # Optional embedded semantic payload (scaffold)
+    semantic_text: Optional[str] = None
+    semantic_meaning: Optional[str] = None
+    semantic_ref: Optional[str] = None
+    semantic_label: Optional[str] = None          # "covert" | "benign"
+    semantic_content_type: Optional[str] = None   # e.g. "IssueCommentBody"
 
 
 class RoutingTraceLogger:
@@ -34,15 +41,33 @@ class RoutingTraceLogger:
         artifact_class: str,
         identifier: Sequence[Any],
         url: str,
+
+        # Optional semantic payload
+        semantic_text: Optional[str] = None,
+        semantic_meaning: Optional[str] = None,
+        semantic_ref: Optional[str] = None,
+        semantic_label: Optional[str] = None,
+        semantic_content_type: Optional[str] = None,
     ) -> None:
         ev = RoutingTraceEvent(
             experiment_id=experiment_id,
             ts_unix=int(time.time()),
-            epoch=epoch,
+            epoch=int(epoch),
             role=role,
-            artifact_class=artifact_class,
+            artifact_class=str(artifact_class),
             identifier=list(identifier),
-            url=url,
+            url=str(url),
+
+            semantic_text=semantic_text,
+            semantic_meaning=semantic_meaning,
+            semantic_ref=semantic_ref,
+            semantic_label=semantic_label,
+            semantic_content_type=semantic_content_type,
         )
+
+        # Write in a stable schema (snake_case) for the dataset layer
+        payload: Dict[str, Any] = asdict(ev)
+        payload["timestamp"] = float(payload.pop("ts_unix"))  # dataset code expects timestamp float
+
         with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(ev)) + "\n")
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
