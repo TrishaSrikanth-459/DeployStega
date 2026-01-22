@@ -120,15 +120,9 @@ This structure mirrors realistic application logs while preserving sufficient st
 
 ### 5.1 Embedded semantic content
 
-Semantic content is embedded directly within the `metadata` field of interaction events, under keys such as `semantic_content`.
+Semantic content is embedded directly within the `metadata` field of interaction events, under the key `semantic_content`.
 
-This design reflects scenarios in which adversaries may observe limited or partial textual content (e.g., comments, commit messages, issue bodies) through logs, snapshots, or audit trails.
-
----
-
-### 5.2 Placeholder content
-
-In the current release, semantic fields may contain placeholder text. These placeholders are explicitly marked and exist to validate the end-to-end dataset structure. In experimental runs, they are replaced with real benign or steganographic content.
+This design reflects scenarios in which adversaries may observe textual content (e.g., comments, commit messages, issue bodies) through logs, snapshots, or audit trails.
 
 ---
 
