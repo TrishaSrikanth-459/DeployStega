@@ -18,9 +18,9 @@ An adversary trains a classifier to distinguish F(D) from F(D′).
 
 We define empirical ε as:
 
-\[
+$$
 \varepsilon_{\text{empirical}} = \ln\left(\frac{\text{TPR}}{\text{FPR}}\right)
-\]
+$$
 
 Where:
 - TPR = true positive rate (covert users flagged)
