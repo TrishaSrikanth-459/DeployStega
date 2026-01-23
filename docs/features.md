@@ -23,9 +23,9 @@ The adversary’s capability class is defined as:
 $$
 \mathcal{F} =
 \mathcal{F}_{\text{semantic}}
-\;\cup\;
+\\cup\
 \mathcal{F}_{\text{behavioral}}
-\;\cup\;
+\\cup\
 \mathcal{F}_{\text{routing}}
 $$
 
