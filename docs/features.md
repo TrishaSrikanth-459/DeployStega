@@ -4,6 +4,10 @@ This document formally defines the adversarial feature space $\mathcal{F}$ used 
 DeployStega framework. Features represent all semantic, behavioral, and routing
 observables realistically accessible to an adversary via application-level logs.
 
+We distinguish **features**, which are inputs to adversarial classifiers, from
+**metrics**, which quantify detection performance. This document enumerates
+features only.
+
 ---
 
 ## Notation
@@ -19,9 +23,9 @@ The adversary’s capability class is defined as:
 $$
 \mathcal{F} =
 \mathcal{F}_{\text{semantic}}
-\\cup\
+\;\cup\;
 \mathcal{F}_{\text{behavioral}}
-\\cup\
+\;\cup\;
 \mathcal{F}_{\text{routing}}
 $$
 
