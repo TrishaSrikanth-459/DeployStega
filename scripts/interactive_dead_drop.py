@@ -22,12 +22,65 @@ TRACE_PATH = Path("experiments/routing_trace.jsonl")
 
 
 # ============================================================
-# Feasibility (allow-all placeholder)
+# Feasibility (placeholder: allow all)
 # ============================================================
 
 class AllowAllFeasibility(FeasibilityRegion):
     def is_url_allowed(self, *, epoch, artifact_class, role, url) -> bool:
         return True
+
+
+# ============================================================
+# Countdown utilities
+# ============================================================
+
+def wait_until_epoch_start(epoch_origin_unix: int) -> None:
+    printed_minutes: set[int] = set()
+    announced_30 = False
+    announced_15 = False
+
+    while True:
+        now = int(time.time())
+        remaining = epoch_origin_unix - now
+
+        if remaining <= 0:
+            print("\n=== Epoch 0 has started ===\n")
+            return
+
+        if remaining > 30:
+            minutes = remaining // 60
+            if minutes >= 1 and minutes not in printed_minutes:
+                printed_minutes.add(minutes)
+                print(
+                    f"Experiment has not started yet. Begins in "
+                    f"{minutes} minute{'s' if minutes != 1 else ''}"
+                )
+            time.sleep(1)
+            continue
+
+        if remaining <= 30 and not announced_30:
+            print("Experiment has not started yet. Begins in 30 seconds")
+            announced_30 = True
+
+        if remaining <= 15 and not announced_15:
+            print("Experiment has not started yet. Begins in 15 seconds")
+            announced_15 = True
+
+        if remaining <= 5:
+            for i in range(remaining, 0, -1):
+                print(f"Experiment has not started yet. Begins in {i}")
+                time.sleep(1)
+            print("\n=== Epoch 0 has started ===\n")
+            return
+
+        time.sleep(1)
+
+
+def seconds_until_next_epoch(ctx) -> int:
+    now = int(time.time())
+    elapsed = now - ctx.epoch_origin_unix
+    remainder = elapsed % ctx.epoch_duration_seconds
+    return ctx.epoch_duration_seconds - remainder
 
 
 # ============================================================
@@ -81,15 +134,14 @@ def current_epoch(ctx) -> int:
 
 
 # ============================================================
-# Pretty-print required actions (FLAT, NO STEPS)
+# Action printing
 # ============================================================
 
 def print_required_actions(artifact: str, role: Role) -> None:
     actions = ACTION_SPECS[artifact][role]
-
     print("\n--- REQUIRED ACTIONS ---")
-    for action_group in actions:
-        for action in action_group:
+    for step in actions:
+        for action in step:
             print(f"• {action}")
 
 
@@ -102,24 +154,20 @@ def main() -> None:
 
     ctx = load_experiment_context()
 
-    now = int(time.time())
     print("=== Experiment Schedule ===")
-    print(f"Current UNIX time : {now}")
-    print(f"Epoch origin time : {ctx.epoch_origin_unix}")
+    print(f"Current UNIX time : {int(time.time())}")
+    print(f"Epoch origin time : {ctx.epoch_origin_unix}\n")
 
-    if now < ctx.epoch_origin_unix:
-        wait = ctx.epoch_origin_unix - now
-        print(f"\nExperiment starts in {wait} seconds. Waiting...\n")
-        time.sleep(wait)
+    if time.time() < ctx.epoch_origin_unix:
+        wait_until_epoch_start(ctx.epoch_origin_unix)
+    else:
+        print("\n=== Epoch 0 has started ===\n")
 
-    epoch_now = current_epoch(ctx)
-    print(f"\n=== Epoch {epoch_now} has started ===\n")
-
-    # ----------------------------------
-    # Role selection
-    # ----------------------------------
+    # -------- Role selection --------
     while True:
         role_input = input("Select role [sender|receiver]: ").strip().lower()
+        if not role_input:
+            continue
         if role_input in ("sender", "receiver"):
             role: Role = role_input  # type: ignore
             break
@@ -138,80 +186,100 @@ def main() -> None:
     else:
         print(
             "You will:\n"
-            "  • Receive BENIGN text externally\n"
-            "  • Paste it here\n"
+            "  • Paste RECEIVED benign text\n"
             "  • Decode the SECRET message\n"
         )
 
     resolver = build_resolver(ctx)
     trace_logger = RoutingTraceLogger(TRACE_PATH)
 
-    result = resolver.resolve(
-        epoch=epoch_now,
-        sender_id=ctx.sender_id,
-        receiver_id=ctx.receiver_id,
-        role=role,
-    )
+    last_epoch: int | None = None
 
-    artifact = result["artifactClass"]
-    identifier = tuple(result["identifier"])
-    url = result["url"]
+    # ========================================================
+    # MAIN EPOCH LOOP (FIX)
+    # ========================================================
 
-    print("\n=== DEAD DROP ===")
-    print(f"Epoch   : {epoch_now}")
-    print(f"Artifact: {artifact}")
-    print(f"URL     : {url}\n")
+    while True:
+        now = time.time()
 
-    if role == "sender":
-        secret = input("Enter SECRET message to send:\n> ").strip()
+        if ctx.epoch_end_unix is not None and now >= ctx.epoch_end_unix:
+            print("\n=== Experiment session has ended ===")
+            return
 
-        benign = encode_secret_message(
-            secret_message=secret,
-            epoch=epoch_now,
-            artifact_class=artifact,
-        )
+        epoch_now = current_epoch(ctx)
 
-        print("\n--- BENIGN TEXT TO PUBLISH ---")
-        print(benign)
+        if epoch_now != last_epoch:
+            last_epoch = epoch_now
 
-        print_required_actions(artifact, role)
+            result = resolver.resolve(
+                epoch=epoch_now,
+                sender_id=ctx.sender_id,
+                receiver_id=ctx.receiver_id,
+                role=role,
+            )
 
-        trace_logger.append(
-            experiment_id=ctx.experiment_id,
-            role=role,
-            epoch=epoch_now,
-            artifact_class=artifact,
-            identifier=identifier,
-            url=url,
-            semantic_text=benign,
-            semantic_label="covert",
-            semantic_content_type="TokenBinningPlaceholder",
-        )
+            artifact = result["artifactClass"]
+            identifier = tuple(result["identifier"])
+            url = result["url"]
 
-    else:
-        benign = input("Paste RECEIVED benign text:\n> ").strip()
+            print("\n=== DEAD DROP ===")
+            print(f"Epoch   : {epoch_now}")
+            print(f"Artifact: {artifact}")
+            print(f"URL     : {url}\n")
 
-        secret = decode_benign_message(
-            benign_text=benign,
-            epoch=epoch_now,
-            artifact_class=artifact,
-        )
+            if role == "sender":
+                secret = input("Enter SECRET message to send:\n> ").strip()
 
-        print("\n--- DECODED SECRET MESSAGE ---")
-        print(secret)
+                benign = encode_secret_message(
+                    secret_message=secret,
+                    epoch=epoch_now,
+                    artifact_class=artifact,
+                )
 
-        trace_logger.append(
-            experiment_id=ctx.experiment_id,
-            role=role,
-            epoch=epoch_now,
-            artifact_class=artifact,
-            identifier=identifier,
-            url=url,
-            semantic_text=benign,
-            semantic_label="covert",
-            semantic_content_type="TokenBinningPlaceholder",
-        )
+                print("\n--- BENIGN TEXT TO PUBLISH ---")
+                print(benign)
+
+                print_required_actions(artifact, role)
+
+                trace_logger.append(
+                    experiment_id=ctx.experiment_id,
+                    role=role,
+                    epoch=epoch_now,
+                    artifact_class=artifact,
+                    identifier=identifier,
+                    url=url,
+                    semantic_text=benign,
+                    semantic_label="covert",
+                    semantic_content_type="TokenBinningPlaceholder",
+                )
+
+            else:
+                benign = input("Paste RECEIVED benign text:\n> ").strip()
+
+                secret = decode_benign_message(
+                    benign_text=benign,
+                    epoch=epoch_now,
+                    artifact_class=artifact,
+                )
+
+                print("\n--- DECODED SECRET MESSAGE ---")
+                print(secret)
+
+                trace_logger.append(
+                    experiment_id=ctx.experiment_id,
+                    role=role,
+                    epoch=epoch_now,
+                    artifact_class=artifact,
+                    identifier=identifier,
+                    url=url,
+                    semantic_text=benign,
+                    semantic_label="covert",
+                    semantic_content_type="TokenBinningPlaceholder",
+                )
+
+        time.sleep(seconds_until_next_epoch(ctx))
 
 
 if __name__ == "__main__":
     main()
+
