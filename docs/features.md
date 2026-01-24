@@ -1,201 +1,139 @@
 # DeployStega Feature Set Specification
 
-This document formally defines the adversarial **feature space** $\mathcal{F}$ used in the
-DeployStega framework.
+This document formally defines the adversarial feature space $F$ used in the
+DeployStega framework. Features represent all semantic, behavioral, and routing
+observables realistically accessible to an adversary via application-level logs.
 
-- **Features** are **measurable quantities extracted from logs** and used as **inputs** to adversarial classifiers.
-- **Metrics** are **evaluation outputs** (e.g., classifier AUC, empirical $\varepsilon$) that quantify how well an adversary can detect covert behavior **using** features.
-
-This document enumerates **features only**.
+We distinguish **features**, which are inputs to adversarial classifiers, from
+**metrics**, which quantify the adversary’s detection performance. This document
+enumerates features only.
 
 ---
 
 ## Notation
 
-### Logs and structure
-We model platform activity as event logs.
+Let:
+- $D$ denote a dataset of benign user interaction logs
+- $D'$ denote a dataset where one or more users are replaced with covert users
+- $\ell \in D \cup D'$ denote a single user log
+- $F(\ell) \in \mathbb{R}^d$ denote the feature vector extracted from log $\ell$
 
-- A **user log** is a time-ordered sequence of events for one user:
-  $$\ell_u = (e_1, e_2, \dots, e_n)$$
-
-- Each **event** $e$ has at least:
-  - timestamp $t(e)$
-  - action/event type $\text{type}(e)$
-  - artifact identity $\text{id}(e)$ (e.g., `(artifact_class, *identifier)`)
-  - role $\text{role}(e)\in\{\text{sender}, \text{receiver}\}$ (when available)
-  - optional text content $\text{text}(e)$ (for message-generating events)
-
-### Windows
-We define fixed, adversary-known segmentation functions:
-
-- **Message window**: individual message-bearing event(s) (e.g., a comment body).
-- **Session window**: contiguous block of events for user $u$ separated by inactivity gaps:
-  $$\text{session}(u) = \{e_i,\dots,e_j\}$$
-  (gap threshold is fixed and public to the adversary).
-- **Epoch window**: platform-defined epoch index $\text{epoch}(e)\in\mathbb{Z}_{\ge 0}$.
-- **User window**: all events for a user $u$ over the evaluation horizon.
-- **Pair window**: all events for a sender–receiver pair $(s,r)$ over the horizon.
-
-A feature is extracted by applying a function to a window:
-$$f(W) \in \mathbb{R}^d$$
-
----
-
-## What “aggregation” means (explicit, not vague)
-
-Many features are naturally computed at a **base window**, then summarized at larger windows.
-
-Example:
-- Base: compute **per-message** perplexity values $x_1,x_2,\dots,x_m$ inside a session.
-- Per-session aggregation then produces:
-  - `mean`: $\frac{1}{m}\sum_i x_i$
-  - `variance`: $\frac{1}{m}\sum_i (x_i-\bar{x})^2$
-  - `quantiles`: e.g., $q_{0.5}, q_{0.9}$
-  - `histogram`: counts in fixed bins
-
-So “mean/variance under per-session” **does not mean** “mean of a session.”
-It means: **mean of the base feature values that occurred inside that session**.
-
----
-
-## Capability Class
-
-The adversary’s capability class is:
+The adversary’s capability class is defined as:
 
 $$
-\mathcal{F} =
+\mathcal{F}
+=
 \mathcal{F}_{\text{semantic}}
-\;\cup\;
+\cup
 \mathcal{F}_{\text{behavioral}}
-\;\cup\;
+\cup
 \mathcal{F}_{\text{routing}}
 $$
 
 ---
 
-# 1) Semantic Feature Space $\mathcal{F}_{\text{semantic}}$
+## Semantic Feature Space $\mathcal{F}_{\text{semantic}}$
 
-Semantic features are computed from user-generated text in message-bearing events
-(e.g., issue bodies, comments, PR descriptions).
+Semantic features capture linguistic deviations introduced by steganographic
+encoding. These features are computed over user-generated text artifacts.
 
-### Semantic features (definitions)
+| Feature Name | Symbol | Description |
+|-------------|--------|-------------|
+| Perplexity | $f_{\text{ppl}}$ | Average token-level perplexity under a reference language model |
+| Token-level KL divergence | $f_{\text{KL}}$ | KL divergence between next-token distributions under two contexts |
+| Sentence embedding | $f_{\text{emb}}$ | Normalized sentence embedding vector (e.g., SBERT) |
+| Embedding distance | $f_{\text{emb-dist}}$ | Pairwise cosine distance between embeddings |
+| Token count | $f_{\text{len}}$ | Number of tokens in message |
 
-| Feature Name | Symbol | Definition (base computation) |
-|---|---|---|
-| Perplexity | $f_{\text{ppl}}$ | Per-message perplexity under a reference LM on the message text |
-| Token-level KL divergence | $f_{\text{KL}}$ | KL divergence between next-token distributions under two contexts (e.g., $C_0$ vs $C_1$) |
-| Sentence embedding vector | $f_{\text{emb}}$ | Normalized embedding vector (e.g., SBERT) for the message text |
-| Embedding distance | $f_{\text{emb-dist}}$ | Pairwise cosine distance between embeddings of messages within a window |
-| Token count | $f_{\text{len}}$ | Number of tokens (under fixed tokenizer) in the message text |
-
----
-
-## Allowed aggregation windows (Semantic)
-
-**IMPORTANT:** This table uses **words only** (no checkmarks).
-Each cell explicitly says what is computed at that window.
-
-**Cell semantics**
-- `raw` = the feature is computed directly at that window (base output)
-- `agg(...)` = compute per-base values inside the window, then summarize using the listed operators
-- `—` = not defined / not used at that window
-
-| Feature (Symbol) | Per-Message | Per-Session | Per-Epoch | Per-User |
-|---|---|---|---|---|
-| $f_{\text{ppl}}$ | raw | agg(mean, variance, quantiles) | agg(mean, variance, quantiles) | agg(mean, variance, quantiles) |
-| $f_{\text{KL}}$ | raw | agg(mean, quantiles) | agg(mean, quantiles) | agg(mean, quantiles) |
-| $f_{\text{emb}}$ | raw (vector) | — | — | — |
-| $f_{\text{emb-dist}}$ | raw (pairwise, within window) | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) |
-| $f_{\text{len}}$ | raw | agg(mean, variance, quantiles) | agg(mean, variance, quantiles) | agg(mean, variance, quantiles) |
-
-**Notes**
-- We do **not** aggregate $f_{\text{emb}}$ here because it is a high-dimensional vector; keeping it raw avoids conflating representation with summary statistics. If you later want it, define an explicit operator set (e.g., PCA projection + mean) and add it here.
+Semantic features are extracted per message and may be aggregated per session or user.
 
 ---
 
-# 2) Behavioral Feature Space $\mathcal{F}_{\text{behavioral}}$
+## Behavioral Feature Space $\mathcal{F}_{\text{behavioral}}$
 
-Behavioral features capture timing and interaction structure from logs, independent of text meaning.
+Behavioral features capture temporal and structural properties of user interaction
+patterns observable through application logs.
 
-### Behavioral features (definitions)
+### Timing and Session Features
 
-| Feature Name | Symbol | Definition (base computation) |
-|---|---|---|
-| Inter-event time | $f_t$ | $\Delta t_i = t(e_{i}) - t(e_{i-1})$ for consecutive events by same user |
-| Session length | $f_{\text{sess}}$ | session duration: $t(e_{\text{last}}) - t(e_{\text{first}})$ |
-| Action frequency | $f_{\text{freq}}$ | count of events per fixed time unit (e.g., per hour, per day) |
-| Event-type frequency | $f_{\text{etype}}$ | normalized distribution over event types within window |
-| Artifact revisit rate | $f_{\text{revisit}}$ | fraction of events whose artifact id was seen before in the window |
-| Artifact transition topology | $f_{\text{trans}}$ | transition matrix / probabilities over artifact classes (or artifact IDs) |
-| Sender→receiver latency | $f_{\text{review-lat}}$ | time between sender write/update and receiver reply (when defined) |
-| Retrieval latency | $f_{\text{retr-lat}}$ | time from sender update to receiver access of updated artifact state |
-| Temporal correlation | $f_{\text{corr}}$ | cross-correlation / coupling statistic between sender and receiver activity series |
+| Feature Name | Symbol | Description |
+|-------------|--------|-------------|
+| Inter-event time | $f_t$ | Time gap between consecutive user actions |
+| Session length | $f_{\text{sess}}$ | Duration of user sessions |
+| Action frequency | $f_{\text{freq}}$ | Actions per unit time (hour/day) |
 
----
+### Interaction Structure
 
-## Allowed aggregation windows (Behavioral)
+| Feature Name | Symbol | Description |
+|-------------|--------|-------------|
+| Event-type frequency | $f_{\text{etype}}$ | Distribution over action types (comment, edit, view, etc.) |
+| Artifact revisit rate | $f_{\text{revisit}}$ | Probability of re-accessing the same artifact |
+| Artifact transition | $f_{\text{trans}}$ | Transition probabilities between artifact classes |
 
-Again: **words only**, and each cell spells out what is computed.
+### Cross-User Timing Correlation
 
-| Feature (Symbol) | Per-Event | Per-Session | Per-Epoch | Per-User | Per-Pair |
-|---|---|---|---|---|---|
-| $f_t$ | raw | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) | — |
-| $f_{\text{sess}}$ | — | raw | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) | — |
-| $f_{\text{freq}}$ | — | raw (events / unit) | raw (events / unit) | agg(mean, variance, quantiles) | — |
-| $f_{\text{etype}}$ | raw (one-hot type) | agg(mean-as-proportions) | agg(mean-as-proportions) | agg(mean-as-proportions) | — |
-| $f_{\text{revisit}}$ | raw | agg(mean, quantiles) | agg(mean, quantiles) | agg(mean, quantiles) | — |
-| $f_{\text{trans}}$ | raw (transition step) | agg(mean-as-transition-probs) | agg(mean-as-transition-probs) | agg(mean-as-transition-probs) | — |
-| $f_{\text{review-lat}}$ | raw | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) |
-| $f_{\text{retr-lat}}$ | raw | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) | agg(histogram, mean, quantiles) |
-| $f_{\text{corr}}$ | — | raw (pair time series) | agg(mean, quantiles) | agg(mean, quantiles) | raw |
-
-**Clarification about “mean-as-proportions”**
-- For distributions (event-type freq, transitions), the base outputs are vectors summing to 1. “mean-as-proportions” means elementwise averaging of those vectors.
+| Feature Name | Symbol | Description |
+|-------------|--------|-------------|
+| Sender → receiver latency | $f_{\text{review-lat}}$ | Time between sender modification and receiver access |
+| Retrieval latency | $f_{\text{retr-lat}}$ | Time between artifact update and later retrieval |
+| Temporal correlation | $f_{\text{corr}}$ | Bi-directional timing correlation between users |
 
 ---
 
-# 3) Routing Feature Space $\mathcal{F}_{\text{routing}}$
+## Routing Feature Space $\mathcal{F}_{\text{routing}}$
 
-Routing features focus on **artifact identity** and **multi-role overlap** induced by dead-drop routing.
+Routing features capture how users navigate application artifacts and how sender
+and receiver behaviors overlap at the artifact-identity level.
 
-### Routing features (definitions)
+### Identifier-Level Concentration
 
-| Feature Name | Symbol | Definition |
-|---|---|---|
-| Identifier concentration (HHI) | $f_{\text{HHI}}$ | $\sum_i p_i^2$ over artifact IDs accessed in a window |
-| Identifier normalized entropy | $f_{\text{entropy}}$ | $H(p)/\log(|\text{support}(p)|)$ in $[0,1]$ |
-| Role asymmetry over artifact classes | $f_{\text{role-dist}}$ | divergence between sender vs receiver distributions over artifact_class |
-| Shared artifact overlap | $f_{\text{overlap}}$ | fraction of artifact IDs touched by both roles at least once |
-| Sender-only fraction | $f_{\text{sender-only}}$ | fraction of IDs touched only by sender |
-| Receiver-only fraction | $f_{\text{receiver-only}}$ | fraction of IDs touched only by receiver |
-| Shared access topologytology vector | $f_{\text{topo}}$ | vector $(\text{both}, \text{sender-only}, \text{receiver-only})$ proportions |
+| Feature Name | Symbol | Description |
+|-------------|--------|-------------|
+| Identifier concentration (HHI) | $f_{\text{HHI}}$ | Herfindahl–Hirschman Index over accessed artifact IDs |
+| Identifier entropy | $f_{\text{entropy}}$ | Normalized entropy of artifact ID access distribution |
 
----
+### Role-Asymmetric Routing
 
-## Allowed aggregation windows (Routing)
+| Feature Name | Symbol | Description |
+|-------------|--------|-------------|
+| Role artifact distribution | $f_{\text{role-dist}}$ | Divergence between sender and receiver distributions over artifact classes |
 
-Routing is fundamentally identity-based and typically defined at epoch/user/pair scales.
+### Shared Access and Topology
 
-| Feature (Symbol) | Per-Event | Per-Epoch | Per-User | Per-Pair |
-|---|---|---|---|---|
-| $f_{\text{HHI}}$ | — | raw | agg(mean, quantiles) | raw |
-| $f_{\text{entropy}}$ | — | raw | agg(mean, quantiles) | raw |
-| $f_{\text{role-dist}}$ | — | raw | raw | raw |
-| $f_{\text{overlap}}$ | — | raw | — | raw |
-| $f_{\text{sender-only}}$ | — | raw | — | raw |
-| $f_{\text{receiver-only}}$ | — | raw | — | raw |
-| $f_{\text{topo}}$ | — | raw (vector) | — | raw (vector) |
+| Feature Name | Symbol | Description |
+|-------------|--------|-------------|
+| Shared artifact overlap | $f_{\text{overlap}}$ | Fraction of artifact IDs accessed by both roles |
+| Sender-only fraction | $f_{\text{sender-only}}$ | Artifacts accessed exclusively by sender |
+| Receiver-only fraction | $f_{\text{receiver-only}}$ | Artifacts accessed exclusively by receiver |
+| Shared topology profile | $f_{\text{topo}}$ | Vector of shared vs exclusive artifact access proportions |
+
+Routing features are multi-user observables and are uniquely induced by
+application-layer dead-drop communication.
 
 ---
 
-## Summary: Features vs Metrics (one sentence each)
+## Feature Aggregation and Windows
 
-- **Features** ($\mathcal{F}$): measurable log-derived quantities used as classifier inputs.
-- **Metrics** (e.g., AUC, empirical $\varepsilon$): numbers summarizing an adversary’s ability to distinguish $D$ vs $D'$ **using** features.
+Features may be extracted at multiple granularities:
+- Per action
+- Per session
+- Per epoch
+- Per user
+
+Aggregation functions include:
+- Mean
+- Variance
+- Quantiles
+- Histograms
+
+All aggregation windows are fixed and known to the adversary.
 
 ---
 
-## Role in Evaluation (context only)
+## Role in Evaluation
 
-These features form the complete adversarial observable space supplied to adversarial classifiers.
-Classifier performance (AUC, empirical $\varepsilon$, etc.) is reported elsewhere as **evaluation metrics**.
+These features form the complete adversarial observable space.
+They are provided as inputs to adversarial classifiers whose performance
+is evaluated using population-level detectability metrics such as empirical $\varepsilon$.
+
+No feature directly constitutes a detection decision.
