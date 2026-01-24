@@ -22,7 +22,7 @@ We model platform activity as event logs.
   - timestamp $t(e)$
   - action/event type $\text{type}(e)$
   - artifact identity $\text{id}(e)$ (e.g., `(artifact_class, *identifier)`)
-  - role $\text{role}(e)\in\{\text{sender},\text{receiver}\}$ (when available)
+  - role $\text{role}(e)\in\{\text{sender}, \text{receiver}\}$ (when available)
   - optional text content $\text{text}(e)$ (for message-generating events)
 
 ### Windows
