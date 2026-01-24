@@ -6,7 +6,7 @@ DeployStega framework.
 - **Features** are **measurable quantities extracted from logs** and used as **inputs** to adversarial classifiers.
 - **Metrics** are **evaluation outputs** (e.g., classifier AUC, empirical $\varepsilon$) that quantify how well an adversary can detect covert behavior **using** features.
 
-This document enumerates **features only** (not detection metrics).
+This document enumerates **features only**.
 
 ---
 
