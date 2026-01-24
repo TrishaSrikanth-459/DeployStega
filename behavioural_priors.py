@@ -1,7 +1,6 @@
 """
 Extract behavioral priors from GitHub Archive data.
-Parses GH Archive logs (June 1 - July 1, 2025) to extract empirical
-distributions of behavioral features.
+Parses GH Archive logs (June 1 - July 1, 2025) to extract empirical distributions of behavioral features.
 """
 import json
 import gzip
@@ -78,12 +77,11 @@ def load_gharchive_data(data_dir: str = "data") -> BenignDataset:
     data_path = Path(data_dir)
     files_to_process = []
 
-    # Process June 1-30
+    # Process June 1-July 1
     for day in range(DATA_DAY_START, 31):
         pattern = f"{DATA_YEAR}-{DATA_MONTH_START:02d}-{day:02d}-*.json.gz"
         files_to_process.extend(sorted(data_path.glob(pattern)))
 
-    # Process July 1
     pattern = f"{DATA_YEAR}-{DATA_MONTH_END:02d}-{DATA_DAY_END:02d}-*.json.gz"
     files_to_process.extend(sorted(data_path.glob(pattern)))
 
