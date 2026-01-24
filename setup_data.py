@@ -1,24 +1,22 @@
-
 """
 Download GitHub Archive data for June 1 - July 1, 2025.
 """
-
-import urllib.request
+import requests 
 from pathlib import Path
 from datetime import datetime, timedelta
 
 
-def download_gharchive_range(start_date, end_date, output_dir="data"):
+def download_gharchive_range(start_date, end_date, output_dir):
     """
     Download GH Archive data for date range.
-
+    
     Args:
         start_date: Start date (datetime object)
         end_date: End date (datetime object)
         output_dir: Directory to save files
     """
     output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     print("="*70)
     print("DOWNLOADING GITHUB ARCHIVE DATA")
@@ -48,10 +46,18 @@ def download_gharchive_range(start_date, end_date, output_dir="data"):
 
             try:
                 print(f"Downloading {filename}...", end="", flush=True)
-                urllib.request.urlretrieve(url, output_file)
+                
+                # Use requests for better SSL handling
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                
+                with open(output_file, 'wb') as f:
+                    f.write(response.content)
+                
                 file_size = output_file.stat().st_size / (1024 * 1024)  # MB
                 print(f" ✓ ({file_size:.1f} MB)")
                 downloaded += 1
+                
             except Exception as e:
                 print(f" ✗ Error: {e}")
                 errors += 1
@@ -69,12 +75,25 @@ def download_gharchive_range(start_date, end_date, output_dir="data"):
     print("="*70)
     print()
 
+
 def main():
     """Download June 1 - July 1, 2025 data."""
+    
+    # CONFIGURE OUTPUT DIRECTORY HERE
+   
+    output_dir = "data"
+    
+    output_dir = "/Users/...../data"
+    
+    print(f"Download location: {Path(output_dir).absolute()}")
+    print("Estimated time: 1.5-2 hours")
+    print("Estimated size: ~20-30 GB")
+    print()
+    
     start = datetime(2025, 6, 1)
     end = datetime(2025, 7, 1)
 
-    download_gharchive_range(start, end)
+    download_gharchive_range(start, end, output_dir)
 
     print("✓ Download complete!")
     print("Run extract_behavioral_priors.py next.")
