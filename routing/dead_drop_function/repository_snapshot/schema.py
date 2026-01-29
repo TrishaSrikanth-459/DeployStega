@@ -17,16 +17,16 @@ class ArtifactClass(Enum):
     - Benign interaction classes MUST NOT appear here.
     """
 
-    Repository = "repository"
-    Issue = "issue"
-    IssueComment = "issue_comment"
-    PullRequest = "pull_request"
-    PullRequestComment = "pull_request_comment"
-    Commit = "commit"
-    CommitComment = "commit_comment"
-    GitTag = "git_tag"
-    Label = "label"
-    Milestone = "milestone"
+    Repository = "Repository"
+    Issue = "Issue"
+    IssueComment = "IssueComment"
+    PullRequest = "PullRequest"
+    PullRequestComment = "PullRequestComment"
+    Commit = "Commit"
+    CommitComment = "CommitComment"
+    GitTag = "GitTag"
+    Label = "Label"
+    Milestone = "Milestone"
 
 
 # =========================
@@ -144,7 +144,7 @@ MILESTONE_SCHEMA = ArtifactIdentifierSchema(
 
 SCHEMA_REGISTRY: Dict[ArtifactClass, ArtifactIdentifierSchema] = {
     s.artifact_class: s
-    for s in [
+    for s in (
         REPOSITORY_SCHEMA,
         ISSUE_SCHEMA,
         ISSUE_COMMENT_SCHEMA,
@@ -155,7 +155,7 @@ SCHEMA_REGISTRY: Dict[ArtifactClass, ArtifactIdentifierSchema] = {
         GIT_TAG_SCHEMA,
         LABEL_SCHEMA,
         MILESTONE_SCHEMA,
-    ]
+    )
 }
 
 
