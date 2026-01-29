@@ -1,38 +1,38 @@
+from __future__ import annotations
+
 """
 build_snapshot.py
 
 Authoritative experiment initializer for DeployStega.
 
-This script is the ONLY entrypoint that creates an experiment.
-
-It:
-- Generates a unique experiment_id
-- Generates opaque sender / receiver IDs
-- Enumerates real GitHub routing artifacts
-- Freezes a repository snapshot
-- Writes BOTH:
-    - experiments/snapshot.json
-    - experiments/experiment_manifest.json
-
-After this script runs:
-- The experiment is fully defined
-- All runtime code becomes read-only
-- Sender / receiver synchronization is fixed
-
-This script MUST be run exactly once per experiment.
+This version:
+- Captures routing artifacts (issues, PRs, commits, tags, labels, milestones)
+- Captures sampled repository file contents (diff-aware grounding)
+- Writes routing snapshot and grounding index as SEPARATE files
+- Writes a VALID experiment manifest (with epoch config)
+- Guarantees ASCII-safe, size-bounded JSON output
 """
 
-from __future__ import annotations
-
+import base64
 import json
 import os
 import time
 import secrets
-import requests
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Tuple
+
+import requests
 
 from routing.dead_drop_function.repository_snapshot.schema import ArtifactClass
+
+
+# ============================================================
+# Paths
+# ============================================================
+
+SNAPSHOT_PATH = Path("experiments/snapshot.json")
+GROUNDING_PATH = Path("experiments/grounding_index.json")
+MANIFEST_PATH = Path("experiments/experiment_manifest.json")
 
 
 # ============================================================
@@ -42,10 +42,20 @@ from routing.dead_drop_function.repository_snapshot.schema import ArtifactClass
 GITHUB_API = "https://api.github.com"
 TOKEN_ENV = "GITHUB_TOKEN"
 
-SNAPSHOT_PATH = Path("experiments/snapshot.json")
-MANIFEST_PATH = Path("experiments/experiment_manifest.json")
+MAX_EXCERPT_CHARS = 800
+MAX_FILES_TO_SAMPLE = 20
+MAX_FILE_BYTES = 20_000
 
-MIN_EPOCH_OFFSET_SECONDS = 5 * 60  # 5 minutes
+# epoch config defaults (must satisfy ExperimentContext contract)
+EPOCH_START_DELAY_SECONDS = 10
+EPOCH_DURATION_SECONDS = 30
+EPOCH_WINDOW_SIZE = 1  # ✅ REQUIRED (ExperimentContext reads epoch["window_size"])
+
+ALLOWED_TEXT_EXTENSIONS = {
+    ".py", ".txt", ".md", ".json", ".yaml", ".yml",
+    ".toml", ".ini", ".cfg", ".js", ".ts", ".rs",
+    ".go", ".java", ".c", ".h", ".cpp",
+}
 
 HEADERS = {
     "Accept": "application/vnd.github+json",
@@ -59,7 +69,7 @@ HEADERS = {
 # ============================================================
 
 def _auth_headers() -> Dict[str, str]:
-    token = os.getenv(TOKEN_ENV)
+    token = os.getenv(TOKEN_ENV, "").strip()
     if not token:
         raise RuntimeError(f"Missing GitHub token: set {TOKEN_ENV}")
     h = dict(HEADERS)
@@ -67,20 +77,31 @@ def _auth_headers() -> Dict[str, str]:
     return h
 
 
+def _request_json(url: str, *, params: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+    try:
+        r = requests.get(url, headers=_auth_headers(), params=params, timeout=30)
+    except requests.RequestException as e:
+        raise RuntimeError(f"GitHub API request failed for {url}: {e}") from e
+
+    if r.status_code in (403, 404):
+        return None
+    if r.status_code >= 400:
+        raise RuntimeError(f"GitHub API error {r.status_code} for {url}: {r.text}")
+    try:
+        return r.json()
+    except Exception as e:
+        raise RuntimeError(f"GitHub API returned non-JSON for {url}: {e}") from e
+
+
 def paginated_get(url: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     page = 1
     while True:
-        r = requests.get(
-            url,
-            headers=_auth_headers(),
-            params={"per_page": 100, "page": page},
-        )
-        r.raise_for_status()
-        batch = r.json()
-        if not batch:
+        batch = _request_json(url, params={"per_page": 100, "page": page})
+        if not isinstance(batch, list) or not batch:
             break
-        out.extend(batch)
+        # only keep dict items
+        out.extend([x for x in batch if isinstance(x, dict)])
         page += 1
     return out
 
@@ -89,96 +110,174 @@ def generate_id() -> str:
     return secrets.token_hex(16)
 
 
-def _parse_unix_timestamp_seconds(raw: str, *, field_name: str) -> int:
-    """
-    Parse UNIX timestamps robustly.
-
-    Accepts:
-      - seconds (e.g. 1769111958)
-      - milliseconds (e.g. 1769111958000) → auto-converted
-    """
-    s = raw.strip()
-    if not s:
-        raise RuntimeError(f"{field_name} is required (non-empty).")
-
-    try:
-        value = int(s)
-    except ValueError as e:
-        raise RuntimeError(
-            f"{field_name} must be an integer UNIX timestamp. Got: {raw!r}"
-        ) from e
-
-    # If value is clearly milliseconds, convert to seconds
-    if value >= 10_000_000_000:  # ≥ 1e10 → milliseconds
-        value //= 1000
-
-    return value
+def _clean_excerpt(text: Optional[str]) -> str:
+    t = (text or "").replace("\x00", "").strip()
+    # ASCII-safe
+    t = "".join(c for c in t if ord(c) < 128)
+    return t[:MAX_EXCERPT_CHARS]
 
 
-def _fmt_delta(seconds: int) -> str:
-    sign = "-" if seconds < 0 else "+"
-    seconds = abs(seconds)
-    m, s = divmod(seconds, 60)
-    h, m = divmod(m, 60)
-    if h:
-        return f"{sign}{h}h {m}m {s}s"
-    if m:
-        return f"{sign}{m}m {s}s"
-    return f"{sign}{s}s"
+def _artifact_key(cls: ArtifactClass, identifier: List[Any]) -> str:
+    if cls == ArtifactClass.Repository:
+        o, r = identifier
+        return f"Repository:{o}/{r}"
+    if cls in (ArtifactClass.Issue, ArtifactClass.PullRequest):
+        o, r, n = identifier
+        return f"{cls.name}:{o}/{r}#{n}"
+    if cls == ArtifactClass.Commit:
+        o, r, sha = identifier
+        return f"Commit:{o}/{r}@{sha}"
+    if cls == ArtifactClass.GitTag:
+        o, r, tag = identifier
+        return f"GitTag:{o}/{r}@{tag}"
+    if cls == ArtifactClass.Label:
+        o, r, name = identifier
+        return f"Label:{o}/{r}:{name}"
+    if cls == ArtifactClass.Milestone:
+        o, r, n = identifier
+        return f"Milestone:{o}/{r}#{n}"
+    raise RuntimeError(f"Unknown artifact class: {cls}")
+
+
+# ============================================================
+# Repository file capture (grounding)
+# ============================================================
+
+def _is_text_file(path: str) -> bool:
+    return any(path.endswith(ext) for ext in ALLOWED_TEXT_EXTENSIONS)
+
+
+def _walk_tree(tree_url: str, out: Dict[str, str]) -> None:
+    if len(out) >= MAX_FILES_TO_SAMPLE:
+        return
+
+    tree = _request_json(tree_url)
+    if not isinstance(tree, dict):
+        return
+
+    for entry in tree.get("tree", []):
+        if len(out) >= MAX_FILES_TO_SAMPLE:
+            return
+        if not isinstance(entry, dict):
+            continue
+
+        etype = entry.get("type")
+        path = entry.get("path")
+
+        if etype == "tree" and isinstance(entry.get("url"), str):
+            _walk_tree(entry["url"], out)
+
+        elif etype == "blob":
+            if not isinstance(path, str) or not _is_text_file(path):
+                continue
+
+            size = entry.get("size", 0)
+            if not isinstance(size, int) or size <= 0 or size > MAX_FILE_BYTES:
+                continue
+
+            blob_url = entry.get("url")
+            if not isinstance(blob_url, str):
+                continue
+
+            blob = _request_json(blob_url)
+            if not isinstance(blob, dict):
+                continue
+            if blob.get("encoding") != "base64":
+                continue
+
+            try:
+                raw = base64.b64decode(blob.get("content", ""))
+                text = raw.decode("utf-8", errors="ignore")
+                out[path] = _clean_excerpt(text)
+            except Exception:
+                continue
+
+
+def fetch_repo_grounding(owner: str, repo: str, branch: str) -> Dict[str, str]:
+    files: Dict[str, str] = {}
+    root = _request_json(f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{branch}")
+    if isinstance(root, dict) and isinstance(root.get("url"), str):
+        _walk_tree(root["url"], files)
+    return files
 
 
 # ============================================================
 # Snapshot construction
 # ============================================================
 
-def build_snapshot(owner: str, repo: str) -> Dict[str, List[Dict[str, Any]]]:
-    artifacts: Dict[str, List[Dict[str, Any]]] = {}
+def build_snapshot(
+    owner: str, repo: str
+) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Dict[str, Any]]]:
 
-    def add(cls: ArtifactClass, identifier: List[Any]) -> None:
+    artifacts: Dict[str, List[Dict[str, Any]]] = {}
+    grounding_index: Dict[str, Dict[str, Any]] = {}
+
+    def add_artifact(cls: ArtifactClass, identifier: List[Any]) -> None:
+        key = _artifact_key(cls, identifier)
         artifacts.setdefault(cls.name, []).append(
             {
                 "artifactClass": cls.name,
                 "identifier": identifier,
+                "key": key,
             }
         )
 
-    add(ArtifactClass.Repository, [owner, repo])
+    repo_obj = _request_json(f"{GITHUB_API}/repos/{owner}/{repo}")
+    if not isinstance(repo_obj, dict):
+        raise RuntimeError("Failed to fetch repository metadata")
 
-    issues = paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/issues?state=all")
-    for issue in issues:
+    default_branch = repo_obj.get("default_branch")
+
+    # Repository
+    add_artifact(ArtifactClass.Repository, [owner, repo])
+
+    # Grounding
+    if isinstance(default_branch, str):
+        grounding_index[f"Repository:{owner}/{repo}"] = {
+            "kind": "Repository",
+            "default_branch": default_branch,
+            "files": fetch_repo_grounding(owner, repo, default_branch),
+        }
+
+    # Issues (exclude PRs)
+    for issue in paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/issues"):
         if "pull_request" in issue:
             continue
-        n = issue["number"]
-        add(ArtifactClass.Issue, [owner, repo, n])
+        n = issue.get("number")
+        if isinstance(n, int):
+            add_artifact(ArtifactClass.Issue, [owner, repo, n])
 
-        comments = paginated_get(issue["comments_url"])
-        if comments:
-            add(ArtifactClass.IssueComment, [owner, repo, n])
+    # PRs
+    for pr in paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/pulls"):
+        n = pr.get("number")
+        if isinstance(n, int):
+            add_artifact(ArtifactClass.PullRequest, [owner, repo, n])
 
-    prs = paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/pulls?state=all")
-    for pr in prs:
-        n = pr["number"]
-        add(ArtifactClass.PullRequest, [owner, repo, n])
+    # Commits
+    for c in paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/commits"):
+        sha = c.get("sha")
+        if isinstance(sha, str):
+            add_artifact(ArtifactClass.Commit, [owner, repo, sha])
 
-        comments = paginated_get(pr["_links"]["comments"]["href"])
-        if comments:
-            add(ArtifactClass.PullRequestComment, [owner, repo, n])
+    # Tags
+    for tag in paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/tags"):
+        name = tag.get("name")
+        if isinstance(name, str):
+            add_artifact(ArtifactClass.GitTag, [owner, repo, name])
 
-    commits = paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/commits")
-    for c in commits:
-        sha = c["sha"]
-        add(ArtifactClass.Commit, [owner, repo, sha])
+    # Labels
+    for label in paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/labels"):
+        name = label.get("name")
+        if isinstance(name, str):
+            add_artifact(ArtifactClass.Label, [owner, repo, name])
 
-        comments = paginated_get(
-            f"{GITHUB_API}/repos/{owner}/{repo}/commits/{sha}/comments"
-        )
-        if comments:
-            add(ArtifactClass.CommitComment, [owner, repo, sha])
+    # Milestones
+    for ms in paginated_get(f"{GITHUB_API}/repos/{owner}/{repo}/milestones"):
+        n = ms.get("number")
+        if isinstance(n, int):
+            add_artifact(ArtifactClass.Milestone, [owner, repo, n])
 
-    if not artifacts:
-        raise RuntimeError("Snapshot contains no routing artifacts")
-
-    return artifacts
+    return artifacts, grounding_index
 
 
 # ============================================================
@@ -186,71 +285,13 @@ def build_snapshot(owner: str, repo: str) -> Dict[str, List[Dict[str, Any]]]:
 # ============================================================
 
 def main() -> None:
-    print("\nBuilding routing snapshot...\n")
-
     owner = input("GitHub owner/org: ").strip()
     repo = input("Repository name: ").strip()
 
-    # Single, stable time reference
     built_at_unix = int(time.time())
-    now_reference = built_at_unix
-
-    min_epoch_origin = now_reference + MIN_EPOCH_OFFSET_SECONDS
-
-    print("\n--- Epoch configuration ---")
-    print(f"Current UNIX time (seconds): {now_reference}")
-    print(
-        f"Minimum allowed epoch origin: {min_epoch_origin} "
-        f"(now + {MIN_EPOCH_OFFSET_SECONDS}s)"
-    )
-    print("Tip: You can paste seconds OR milliseconds; milliseconds will be auto-converted.\n")
-
-    # ----------------------------
-    # Epoch origin
-    # ----------------------------
-    epoch_origin = _parse_unix_timestamp_seconds(
-        input("Epoch origin UNIX time: "),
-        field_name="Epoch origin UNIX time",
-    )
-
-    if epoch_origin < min_epoch_origin:
-        raise RuntimeError(
-            "Epoch origin must be at least 5 minutes in the future.\n"
-            f"  required_min_origin   = {min_epoch_origin}\n"
-            f"  provided_epoch_origin = {epoch_origin}\n"
-            f"  delta                 = {_fmt_delta(epoch_origin - min_epoch_origin)}\n"
-        )
-
-    # ----------------------------
-    # Epoch end
-    # ----------------------------
-    min_epoch_end = epoch_origin + MIN_EPOCH_OFFSET_SECONDS
-
-    print(
-        f"\nMinimum allowed epoch end: {min_epoch_end} "
-        f"(epoch origin + {MIN_EPOCH_OFFSET_SECONDS}s)"
-    )
-
-    epoch_end = _parse_unix_timestamp_seconds(
-        input("Epoch end UNIX time: "),
-        field_name="Epoch end UNIX time",
-    )
-
-    if epoch_end < min_epoch_end:
-        raise RuntimeError(
-            "Epoch end must be at least 5 minutes after epoch origin.\n"
-            f"  epoch_origin        = {epoch_origin}\n"
-            f"  required_min_end    = {min_epoch_end}\n"
-            f"  provided_epoch_end  = {epoch_end}\n"
-            f"  delta               = {_fmt_delta(epoch_end - min_epoch_end)}\n"
-        )
-
-    # ----------------------------
-    # Snapshot + manifest
-    # ----------------------------
-    artifacts = build_snapshot(owner, repo)
-
     experiment_id = f"deploystega-{built_at_unix}"
+
+    artifacts, grounding_index = build_snapshot(owner, repo)
 
     snapshot = {
         "experiment_id": experiment_id,
@@ -261,39 +302,40 @@ def main() -> None:
     manifest = {
         "experiment_id": experiment_id,
         "snapshot": str(SNAPSHOT_PATH),
+
+        # ✅ REQUIRED BY ExperimentContext
+        "epoch": {
+            "origin_unix": built_at_unix + EPOCH_START_DELAY_SECONDS,
+            "duration_seconds": EPOCH_DURATION_SECONDS,
+            "window_size": EPOCH_WINDOW_SIZE,  # ✅ FIX
+            "end_unix": None,
+        },
+
         "participants": {
             "sender": {"id": generate_id()},
             "receiver": {"id": generate_id()},
         },
-        "epoch": {
-            "origin_unix": epoch_origin,
-            "end_unix": epoch_end,
-            "duration_seconds": 180,
-            "window_size": 20,
-        },
     }
 
     SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SNAPSHOT_PATH.write_text(json.dumps(snapshot, indent=2))
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
 
-    print("\n✅ Experiment initialized successfully")
-    print(f"Experiment ID : {experiment_id}")
-    print(f"Repository    : {owner}/{repo}")
-    print(f"Snapshot      : {SNAPSHOT_PATH}")
-    print(f"Manifest      : {MANIFEST_PATH}")
+    SNAPSHOT_PATH.write_text(
+        json.dumps(snapshot, indent=2, ensure_ascii=True),
+        encoding="utf-8",
+    )
+    GROUNDING_PATH.write_text(
+        json.dumps(grounding_index, indent=2, ensure_ascii=True),
+        encoding="utf-8",
+    )
+    MANIFEST_PATH.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=True),
+        encoding="utf-8",
+    )
 
-    print("\n🕒 Epoch times (seconds):")
-    print(f"Origin UNIX   : {epoch_origin}")
-    print(f"End UNIX      : {epoch_end}")
-    print(f"Origin is     : {_fmt_delta(epoch_origin - now_reference)} from now")
-
-    print("\n🔐 Participant IDs (share privately):")
-    print(f"Sender ID   : {manifest['participants']['sender']['id']}")
-    print(f"Receiver ID : {manifest['participants']['receiver']['id']}")
-
-    print("\n⚠️  Do NOT modify snapshot or manifest after this point.")
-    print("⚠️  All runtime scripts now operate in read-only mode.\n")
+    print("Snapshot, grounding index, and manifest written successfully.")
+    print(f"  - {SNAPSHOT_PATH}")
+    print(f"  - {GROUNDING_PATH}")
+    print(f"  - {MANIFEST_PATH}")
 
 
 if __name__ == "__main__":
