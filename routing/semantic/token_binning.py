@@ -47,6 +47,26 @@ MAX_SENTENCES_PER_ARTIFACT = 4
 # Explicit payload marker is for controlled testing only
 EXPLICIT_PAYLOAD_FOR_TESTING = False
 
+BITS_PER_SENTENCE = 2
+
+
+# ============================================================
+# Token binning vocabulary (VERY COMMON WORDS)
+# ============================================================
+
+TOKEN_BINS: Dict[str, List[str]] = {
+    "slightly": ["slightly", "somewhat", "a bit", "a little"],
+    "important": ["important", "significant", "notable", "meaningful"],
+    "consider": ["consider", "review", "look at", "evaluate"],
+    "change": ["change", "adjustment", "update", "modification"],
+}
+
+
+REVERSE_TOKEN_BINS: Dict[str, Tuple[str, int]] = {}
+for base, options in TOKEN_BINS.items():
+    for idx, word in enumerate(options):
+        REVERSE_TOKEN_BINS[word] = (base, idx)
+
 
 # ============================================================
 # Surface classification
@@ -57,11 +77,6 @@ def _is_comment(kind: str) -> bool:
 
 
 def surface_mode(artifact_class: str, kind: str) -> str:
-    """
-    reply_comment  -> IssueComment, PRComment, CommitComment
-    edit_body      -> Issue, PullRequest
-    observe_only   -> Repository, Commit, benign pages
-    """
     ac = (artifact_class or "").strip()
     k = (kind or "").strip()
 
@@ -77,10 +92,6 @@ def surface_mode(artifact_class: str, kind: str) -> str:
 # ============================================================
 
 def resolve_reply_target(artifact: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    """
-    If this is a comment artifact, resolve semantic grounding
-    to the *parent* artifact.
-    """
     kind = artifact.get("kind", "")
 
     if _is_comment(kind):
@@ -143,9 +154,7 @@ def rules_for(
         ]
 
     if reply_kind == "Issue":
-        rules += [
-            "Stay aligned with the reported problem or clarification",
-        ]
+        rules += ["Stay aligned with the reported problem or clarification"]
 
     if reply_kind == "PullRequest":
         rules += [
@@ -157,7 +166,7 @@ def rules_for(
 
 
 # ============================================================
-# Text generation (DIFF-AWARE GROUNDING)
+# Text generation (UNCHANGED)
 # ============================================================
 
 def realize_stegotext(
@@ -168,7 +177,6 @@ def realize_stegotext(
     kind = artifact.get("kind", "")
     surface = surface_mode(artifact_class, kind)
 
-    # Observational-only surfaces cannot emit text
     if surface == "observe_only":
         return ""
 
@@ -188,7 +196,6 @@ def realize_stegotext(
 
     rules = rules_for(reply_kind, surface, is_edit, has_diff)
 
-    # ---------------- Context (STRICTLY EVIDENCE-BASED) ----------------
     context: Dict[str, Any] = {
         "artifact_kind": reply_kind,
         "existing_text": existing_text.strip(),
@@ -206,11 +213,7 @@ def realize_stegotext(
 
     instruction = (
         f"Write exactly {MAX_SENTENCES_PER_ARTIFACT} sentences "
-        + (
-            "that revise and refine the existing text below."
-            if is_edit
-            else "appropriate for this GitHub surface."
-        )
+        + ("that revise and refine the existing text below." if is_edit else "appropriate for this GitHub surface.")
     )
 
     prompt = (
@@ -223,19 +226,12 @@ def realize_stegotext(
 
     text = chat_completion(
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Output only the requested sentences as plain text. "
-                    "No explanations, no markdown."
-                ),
-            },
+            {"role": "system", "content": "Output only the requested sentences as plain text."},
             {"role": "user", "content": prompt},
         ],
         max_tokens=MAX_SENTENCES_PER_ARTIFACT * TOKENS_PER_SENTENCE_EST,
     )
 
-    # Hard guards
     text = text.encode("ascii", errors="ignore").decode("ascii").strip()
     if text and text[-1] not in ".!?":
         text += "."
@@ -244,7 +240,54 @@ def realize_stegotext(
 
 
 # ============================================================
-# Public API (epoch-local, non-blocking)
+# Token binning helpers
+# ============================================================
+
+def _bytes_to_bits(data: bytes) -> List[int]:
+    bits: List[int] = []
+    for b in data:
+        for i in range(7, -1, -1):
+            bits.append((b >> i) & 1)
+    return bits
+
+
+def _bits_to_bytes(bits: List[int]) -> bytes:
+    out = bytearray()
+    for i in range(0, len(bits), 8):
+        byte = 0
+        for b in bits[i:i + 8]:
+            byte = (byte << 1) | b
+        out.append(byte)
+    return bytes(out)
+
+
+def _take_bits(bits: List[int], n: int) -> int:
+    val = 0
+    for _ in range(n):
+        val = (val << 1) | (bits.pop(0) if bits else 0)
+    return val
+
+
+def _embed_bits(sentence: str, bin_value: int) -> str:
+    for base, options in TOKEN_BINS.items():
+        if base in sentence:
+            return sentence.replace(base, options[bin_value % 4], 1)
+    return sentence
+
+
+def _extract_bits(sentence: str) -> List[int]:
+    bits: List[int] = []
+    for word in sentence.split():
+        clean = word.strip(".,!?")
+        if clean in REVERSE_TOKEN_BINS:
+            _, idx = REVERSE_TOKEN_BINS[clean]
+            bits.append((idx >> 1) & 1)
+            bits.append(idx & 1)
+    return bits
+
+
+# ============================================================
+# Public API (augmented, not replaced)
 # ============================================================
 
 def encode_secret_message(
@@ -254,27 +297,25 @@ def encode_secret_message(
     artifact_class: str,
     artifact_context: Dict[str, Any],
 ) -> str:
-    """
-    Produce realistic, artifact-consistent benign text for THIS epoch.
-
-    IMPORTANT:
-    - No covert embedding logic here.
-    - No chunking logic here.
-    - Epoch progression and completeness tracking belong to the caller.
-    """
     benign = realize_stegotext(
         artifact_class=artifact_class,
         artifact=artifact_context,
     )
 
-    if not benign:
-        return ""
-
-    if not EXPLICIT_PAYLOAD_FOR_TESTING:
+    if not benign or not secret_message:
         return benign
 
-    payload = base64.urlsafe_b64encode(secret_message.encode()).decode()
-    return benign + f"\n\n[EXPERIMENT_PAYLOAD_B64:{payload}]"
+    bits = _bytes_to_bits(secret_message.encode("utf-8"))
+    sentences = [s.strip() for s in benign.split(".") if s.strip()]
+
+    out: List[str] = []
+    for s in sentences:
+        if bits:
+            b = _take_bits(bits, BITS_PER_SENTENCE)
+            s = _embed_bits(s, b)
+        out.append(s + ".")
+
+    return " ".join(out)
 
 
 def decode_benign_message(
@@ -284,17 +325,17 @@ def decode_benign_message(
     artifact_class: str,
     artifact_context: Dict[str, Any],
 ) -> str:
-    if not EXPLICIT_PAYLOAD_FOR_TESTING:
-        return ""
+    bits: List[int] = []
 
-    marker = "[EXPERIMENT_PAYLOAD_B64:"
-    if marker not in benign_text:
+    for sentence in benign_text.split("."):
+        bits.extend(_extract_bits(sentence))
+
+    if not bits:
         return ""
 
     try:
-        start = benign_text.index(marker) + len(marker)
-        end = benign_text.index("]", start)
-        payload = benign_text[start:end]
-        return base64.urlsafe_b64decode(payload).decode()
+        raw = _bits_to_bytes(bits)
+        return raw.decode("utf-8", errors="ignore").rstrip("\x00")
     except Exception:
         return ""
+
