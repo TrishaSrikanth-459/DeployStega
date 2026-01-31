@@ -183,7 +183,7 @@ An issue comment is uniquely identified by the ordered tuple
 
 ---
 
-## Artifact Class: PullRequestComment
+## Artifact Class: PullRequestReviewComment
 
 ### Description
 User-authored comments associated with a pull request, either in the
