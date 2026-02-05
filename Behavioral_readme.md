@@ -13,7 +13,14 @@ This script extracts empirical behavioral priors from GitHub Archive data using 
 - Internet access (to stream GitHub Archive data from Hugging Face)
 
 ## How to Run
+
+You can run directly on any environment suitable for you.
+
+OR
+
 From the repository root:
 
 ```bash
 python genbehavioural_json.py
+
+
