@@ -12,33 +12,16 @@ import gc
 import sys
 import os
 
-# Mount Google Drive to ensure access to the DeployStega folder
-from google.colab import drive
-drive.mount('/content/drive', force_remount=True)
 
-# Find DeployStega folder and add to path
-deploystega_paths = [
-    '/content/drive/My Drive/DeployStega',
-    '/content/drive/MyDrive/DeployStega',
-]
+REPO_ROOT = Path(__file__).resolve().parent
 
-deploystega_root = None
-for path in deploystega_paths:
-    if os.path.exists(path):
-        deploystega_root = path
-        break
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-if not deploystega_root:
-    raise RuntimeError("DeployStega folder not found in Google Drive")
-
-if deploystega_root not in sys.path:
-    sys.path.insert(0, deploystega_root)
-
-if os.getcwd() != deploystega_root:
-    os.chdir(deploystega_root)
+os.chdir(REPO_ROOT)
 
 print(f"✓ Working directory: {os.getcwd()}")
-print(f"✓ Python path includes: {deploystega_root}")
+print(f"✓ Python path includes repo root")
 print()
 
 try:
