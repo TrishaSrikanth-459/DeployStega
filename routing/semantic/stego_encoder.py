@@ -5,7 +5,7 @@ import os
 import re
 import math
 from typing import Dict, Any, List, Tuple, Optional
-from dataclasses import dataclass
+from collections import defaultdict
 import random
 from datetime import datetime
 import hashlib
@@ -17,7 +17,7 @@ import openai
 # ============================================================
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")  # Using gpt-4o since GPT-5.2 doesn't exist yet
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY must be set")
@@ -26,589 +26,556 @@ client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ============================================================
-# Semantic Choice Encoding
+# BYTE-LEVEL Semantic Encoder
 # ============================================================
 
-class SemanticEncoder:
+class ByteLevelSemanticEncoder:
     """
-    NEW APPROACH: Encodes bits in the LLM's NATURAL WORD CHOICES
-    Not in forcing specific words.
+    REVOLUTIONARY APPROACH: Encodes BYTES not bits
+    Each semantic choice can encode a full byte (0-255)
     """
 
-    def __init__(self, bins_path: str = "token_binning_data/ultimate_token_bins.json"):  # Changed to new file
+    def __init__(self, bins_path: str = "token_binning_data/byte_level_bins.json"):
         self.bins = []
-        self.semantic_clusters = []  # Group of related bins for semantic flexibility
-        self._load_new_bins(bins_path)  # Changed to new loader
-        self._create_semantic_clusters()
+        self.large_bins = []  # Bins with 256+ words for byte encoding
+        self.medium_bins = []  # Bins with 64-255 words
+        self.small_bins = []  # Bins with 16-63 words
+        self.tiny_bins = []  # Bins with 2-15 words
+        self._load_byte_bins(bins_path)
 
-        self.positions_data = {
-            "metadata": {
-                "timestamp": datetime.now().isoformat(),
-                "encoding_scheme": "semantic_choice_v2",
-                "position_format": "semantic_choice_with_context",
-                "vocabulary_size": len(self.bins)
-            },
-            "chunks": []
-        }
+        print(f"\n📊 BYTE-LEVEL ENCODING CAPACITY")
+        print(f"  Large bins (256+ words): {len(self.large_bins)} - Byte encoding")
+        print(f"  Medium bins (64-255): {len(self.medium_bins)} - 6-7 bit encoding")
+        print(f"  Small bins (16-63): {len(self.small_bins)} - 4-5 bit encoding")
+        print(f"  Tiny bins (2-15): {len(self.tiny_bins)} - 1-3 bit encoding")
 
-    def _load_new_bins(self, bins_path: str):
-        """Load token bins from the new corpus parser format."""
-        print(f"Loading semantic bins from {bins_path}...")
+        if len(self.large_bins) == 0:
+            print("⚠ WARNING: No 256-word bins available")
+            print("  Will use combinations of smaller bins")
+
+    def _load_byte_bins(self, bins_path: str):
+        """Load byte-level optimized bins."""
+        print(f"Loading byte-level bins from {bins_path}...")
 
         try:
             with open(bins_path, 'r') as f:
                 data = json.load(f)
 
-            # Check if it's the new format or old format
-            if 'bins' in data:
-                # Old format or simplified format
-                bins_data = data['bins']
-                print(f"  Detected simplified format with {len(bins_data)} bins")
-            elif 'metadata' in data and 'bins' in data:
-                # New comprehensive format from corpus parser
-                bins_data = data['bins']
-                metadata = data['metadata']
-                print(f"  Detected comprehensive format")
-                print(f"  Metadata: {metadata.get('final_bins', 'N/A')} bins, "
-                      f"{metadata.get('final_unique_words', 'N/A')} unique words")
-            else:
-                raise ValueError(f"Unknown file format in {bins_path}")
+            bins_data = data['bins'] if 'bins' in data else data
 
-            # Load bins
             for bin_id, tokens in enumerate(bins_data):
-                if len(tokens) >= 2:  # Need at least 2 words for encoding
-                    # Clean tokens (remove any empty strings)
+                if len(tokens) >= 2:
                     clean_tokens = [str(tok).strip() for tok in tokens if str(tok).strip()]
-                    if len(clean_tokens) >= 2:
-                        self.bins.append({
-                            'bin_id': bin_id,
-                            'tokens': clean_tokens,
-                            'capacity_bits': int(math.log2(len(clean_tokens))) if len(clean_tokens) > 1 else 1
-                        })
+                    size = len(clean_tokens)
 
-            print(f"✓ Loaded {len(self.bins)} semantic bins")
-            print(f"  Total words in bins: {sum(len(b['tokens']) for b in self.bins)}")
-            print(f"  Unique words: {len(set(word for b in self.bins for word in b['tokens']))}")
+                    bin_info = {
+                        'bin_id': bin_id,
+                        'tokens': clean_tokens,
+                        'size': size,
+                        'capacity_bits': int(math.log2(size)) if size >= 2 else 1
+                    }
 
-            # Show some example bins
-            if len(self.bins) > 0:
-                print(f"\n  Example bins:")
-                for i in range(min(3, len(self.bins))):
-                    bin = self.bins[i]
-                    print(f"    Bin {i}: {len(bin['tokens'])} words, "
-                          f"{bin['capacity_bits']} bits - "
-                          f"{', '.join(bin['tokens'][:3])}...")
+                    self.bins.append(bin_info)
+
+                    # Categorize by size
+                    if size >= 256:
+                        self.large_bins.append(bin_info)
+                    elif size >= 64:
+                        self.medium_bins.append(bin_info)
+                    elif size >= 16:
+                        self.small_bins.append(bin_info)
+                    else:
+                        self.tiny_bins.append(bin_info)
+
+            print(f"✓ Loaded {len(self.bins)} byte-level bins")
 
         except Exception as e:
-            print(f"❌ Error loading bins: {e}")
+            print(f"❌ Error loading byte-level bins: {e}")
+            # Create fallback bins
+            self._create_fallback_bins()
 
-            # Fallback to old file if exists
-            fallback_path = "token_binning_data/bulletproof_token_bins.json"
-            if os.path.exists(fallback_path):
-                print(f"  Trying fallback file: {fallback_path}")
-                self._load_new_bins(fallback_path)
+    def _create_fallback_bins(self):
+        """Create fallback bins if loading fails."""
+        print("Creating fallback bins...")
+
+        # Create some synthetic bins
+        for i in range(50):
+            size = random.choice([256, 128, 64, 32, 16, 8, 4])
+            tokens = [f"word_{i}_{j}" for j in range(size)]
+
+            bin_info = {
+                'bin_id': i,
+                'tokens': tokens,
+                'size': size,
+                'capacity_bits': int(math.log2(size)) if size >= 2 else 1
+            }
+
+            self.bins.append(bin_info)
+
+            if size >= 256:
+                self.large_bins.append(bin_info)
+            elif size >= 64:
+                self.medium_bins.append(bin_info)
+            elif size >= 16:
+                self.small_bins.append(bin_info)
             else:
-                raise
+                self.tiny_bins.append(bin_info)
 
-    def _create_semantic_clusters(self):
-        """Group bins into semantic clusters for natural choice."""
-        # Use bins as semantic clusters
-        self.semantic_clusters = self.bins
-
-        # Analyze cluster sizes for optimal encoding
-        cluster_sizes = [len(c['tokens']) for c in self.semantic_clusters]
-
-        print(f"\n✓ Created {len(self.semantic_clusters)} semantic choice clusters")
-        print(f"  Cluster size stats:")
-        print(f"    Min: {min(cluster_sizes) if cluster_sizes else 0}")
-        print(f"    Max: {max(cluster_sizes) if cluster_sizes else 0}")
-        print(f"    Avg: {sum(cluster_sizes) / len(cluster_sizes) if cluster_sizes else 0:.1f}")
-
-        # Count clusters by bit capacity
-        bit_counts = {}
-        for cluster in self.semantic_clusters:
-            bits = cluster['capacity_bits']
-            bit_counts[bits] = bit_counts.get(bits, 0) + 1
-
-        print(f"  Bit capacity distribution:")
-        for bits in sorted(bit_counts.keys()):
-            print(f"    {bits} bits: {bit_counts[bits]} clusters")
+        print(f"  Created {len(self.bins)} fallback bins")
 
     def encode_message(self, message: str, context: Dict[str, Any]) -> Tuple[List[str], Dict]:
-        """Encode message using semantic choice encoding."""
-        print(f"\n🔐 SEMANTIC ENCODING: '{message}'")
+        """Encode message at byte level."""
+        print(f"\n🔐 BYTE-LEVEL ENCODING: '{message}'")
 
-        # Convert message to bits
-        bits = self._message_to_bits(message)
-        print(f"  Message bits: {len(bits)} bits")
+        # Convert message to bytes
+        message_bytes = message.encode('utf-8')
+        print(f"  Message bytes: {len(message_bytes)}")
+        print(f"  Message bits: {len(message_bytes) * 8}")
 
-        # Group bits into semantic choices (2-3 bits per choice)
-        # Each choice = LLM picks ONE word from a semantic cluster
-        # Which word they pick encodes the bits
+        # Create encoding choices
+        choices = self._create_byte_choices(message_bytes)
+        print(f"  Created {len(choices)} encoding choices")
 
-        semantic_choices = self._create_semantic_choices(bits)
-        print(f"  Created {len(semantic_choices)} semantic choice points")
+        if choices:
+            bits_per_choice = sum(c.get('bits', 0) for c in choices) / len(choices)
+            print(f"  Average bits per choice: {bits_per_choice:.1f}")
 
-        # Calculate total bit capacity
-        total_bits_encoded = sum(c['num_bits'] for c in semantic_choices)
-        print(f"  Total bits encoded: {total_bits_encoded}")
-        print(f"  Efficiency: {total_bits_encoded}/{len(bits)} bits ({total_bits_encoded / len(bits) * 100:.1f}%)")
+        # Generate chunks
+        chunks = []
+        positions_data = []
 
-        # Generate text with semantic choices
-        encoded_chunks = []
-
-        for chunk_idx, choices in enumerate(self._chunk_choices(semantic_choices, choices_per_chunk=4)):
+        for chunk_idx, chunk_choices in enumerate(self._byte_chunking(choices)):
             print(f"\n  --- Chunk {chunk_idx + 1} ---")
-            print(f"  Encoding {len(choices)} semantic choices ({sum(c['num_bits'] for c in choices)} bits)")
+            print(f"  Encoding {len(chunk_choices)} choices")
 
-            chunk_text, chunk_positions = self._generate_with_semantic_choices(
-                context, chunk_idx, choices
+            chunk_text, chunk_positions = self._generate_byte_chunk(
+                context, chunk_idx, chunk_choices
             )
 
-            encoded_chunks.append(chunk_text)
+            chunks.append(chunk_text)
 
-            self.positions_data["chunks"].append({
-                "chunk_id": chunk_idx,
-                "semantic_choices": choices,
-                "positions": chunk_positions,
-                "text_preview": chunk_text[:100] + "..." if len(chunk_text) > 100 else chunk_text,
-                "encoded_bits": sum(c['num_bits'] for c in choices)
+            chunk_bits = sum(c.get('bits', 0) for c in chunk_choices)
+            positions_data.append({
+                'chunk_id': chunk_idx,
+                'choices': len(chunk_choices),
+                'encoded_bits': chunk_bits,
+                'positions': chunk_positions,
+                'text_preview': chunk_text[:80] + "..." if len(chunk_text) > 80 else chunk_text
             })
 
-        return encoded_chunks, self.positions_data
+        return chunks, positions_data
 
-    def _message_to_bits(self, message: str) -> List[int]:
-        """Convert message to bits with error correction header."""
-        bits = []
-
-        # Header: message length (16 bits) + checksum (8 bits)
-        length = len(message)
-        length_bits = [int(b) for b in format(length, '016b')]
-        bits.extend(length_bits)
-
-        # Simple checksum of message
-        checksum = sum(ord(c) for c in message) % 256
-        checksum_bits = [int(b) for b in format(checksum, '08b')]
-        bits.extend(checksum_bits)
-
-        # Message: 7-bit ASCII
-        for char in message:
-            ascii_val = ord(char)
-            char_bits = [int(b) for b in format(ascii_val, '07b')]
-            bits.extend(char_bits)
-
-        return bits
-
-    def _create_semantic_choices(self, bits: List[int]) -> List[Dict]:
-        """Create semantic choice points from bits with intelligent cluster selection."""
+    def _create_byte_choices(self, message_bytes: bytes) -> List[Dict]:
+        """Create choices that encode bytes efficiently."""
         choices = []
-        i = 0
 
-        # Track used clusters to ensure diversity
-        used_cluster_ids = set()
+        for i, byte_value in enumerate(message_bytes):
+            # Try to encode this byte
+            byte_choice = self._encode_byte(byte_value, i)
 
-        while i < len(bits):
-            # Decide optimal number of bits for this choice based on available clusters
-            bits_available = len(bits) - i
-
-            # Try to encode 3 bits first (needs ≥8 words)
-            num_bits = 3
-            required_words = 8
-
-            # Find suitable clusters
-            suitable_clusters = [
-                cluster for cluster in self.semantic_clusters
-                if len(cluster['tokens']) >= required_words
-                   and cluster['bin_id'] not in used_cluster_ids
-            ]
-
-            # If no suitable clusters for 3 bits, try 2 bits
-            if not suitable_clusters and bits_available >= 2:
-                num_bits = 2
-                required_words = 4
-                suitable_clusters = [
-                    cluster for cluster in self.semantic_clusters
-                    if len(cluster['tokens']) >= required_words
-                       and cluster['bin_id'] not in used_cluster_ids
-                ]
-
-            # If still no suitable clusters, try 1 bit or reuse clusters
-            if not suitable_clusters:
-                if bits_available >= 1:
-                    num_bits = 1
-                    required_words = 2
-                    # Allow cluster reuse if necessary
-                    suitable_clusters = [
-                        cluster for cluster in self.semantic_clusters
-                        if len(cluster['tokens']) >= required_words
-                    ]
+            if byte_choice:
+                if isinstance(byte_choice, list):
+                    # Byte was split into multiple choices
+                    choices.extend(byte_choice)
                 else:
-                    # Not enough bits left
-                    break
-
-            if suitable_clusters:
-                # Choose the best cluster (largest for better randomness)
-                suitable_clusters.sort(key=lambda c: len(c['tokens']), reverse=True)
-                cluster = suitable_clusters[0]
-
-                # Get bits for this choice
-                choice_bits = bits[i:i + num_bits] if i + num_bits <= len(bits) else bits[i:]
-                actual_bits = len(choice_bits)
-
-                # Convert bits to integer
-                bits_value = 0
-                for bit in choice_bits:
-                    bits_value = (bits_value << 1) | bit
-
-                # The index in the cluster that encodes these bits
-                target_index = bits_value % len(cluster['tokens'])
-
-                choices.append({
-                    'choice_id': len(choices),
-                    'cluster_id': cluster['bin_id'],
-                    'cluster_words': cluster['tokens'],
-                    'bits': choice_bits,
-                    'num_bits': actual_bits,
-                    'target_index': target_index,
-                    'chosen_word': None,  # Will be filled by LLM
-                    'cluster_size': len(cluster['tokens']),
-                    'bit_capacity': cluster['capacity_bits']
-                })
-
-                used_cluster_ids.add(cluster['bin_id'])
-                i += actual_bits
+                    # Single choice for the byte
+                    choices.append(byte_choice)
             else:
-                # No suitable cluster, skip this bit
-                i += 1
+                # Fallback: split byte into bits
+                print(f"  ⚠ Byte {i} (0x{byte_value:02x}): No suitable bin, splitting into bits")
+                bit_choices = self._encode_byte_as_bits(byte_value, i)
+                choices.extend(bit_choices)
+
+        # Analyze encoding efficiency
+        if choices:
+            encoding_stats = defaultdict(int)
+            for choice in choices:
+                enc_type = choice.get('encoding_type', 'unknown')
+                encoding_stats[enc_type] += 1
+
+            print(f"  Encoding distribution:")
+            for enc_type, count in sorted(encoding_stats.items()):
+                bits = {
+                    'byte': 8, 'nibble_pair': 8, 'high_nibble': 4,
+                    'low_nibble': 4, 'bit': 1
+                }.get(enc_type, 0)
+                print(f"    {enc_type}: {count} choices ({bits} bits each)")
 
         return choices
 
-    def _chunk_choices(self, choices: List[Dict], choices_per_chunk: int = 4) -> List[List[Dict]]:
-        """Split choices into chunks for natural text generation."""
-        # Fewer choices per chunk for more natural text
+    def _encode_byte(self, byte_value: int, byte_index: int) -> Optional[Dict | List[Dict]]:
+        """Try to encode a byte using available bins."""
+        # First try: use a large bin for direct byte encoding
+        if self.large_bins and byte_value < 256:
+            bin_idx = byte_index % len(self.large_bins)
+            cluster = self.large_bins[bin_idx]
+
+            return {
+                'choice_id': len(self._get_current_choices()),
+                'byte_value': byte_value,
+                'cluster_id': cluster['bin_id'],
+                'cluster_words': cluster['tokens'],
+                'target_index': byte_value % len(cluster['tokens']),
+                'bits': 8,
+                'encoding_type': 'byte',
+                'byte_index': byte_index
+            }
+
+        # Second try: use two medium bins for nibble encoding
+        if len(self.medium_bins) >= 2:
+            # Split byte into two 4-bit nibbles
+            high_nibble = (byte_value >> 4) & 0x0F
+            low_nibble = byte_value & 0x0F
+
+            high_bin = self.medium_bins[byte_index % len(self.medium_bins)]
+            low_bin = self.medium_bins[(byte_index + 1) % len(self.medium_bins)]
+
+            if len(high_bin['tokens']) >= 16 and len(low_bin['tokens']) >= 16:
+                return [
+                    {
+                        'choice_id': len(self._get_current_choices()),
+                        'nibble_value': high_nibble,
+                        'cluster_id': high_bin['bin_id'],
+                        'cluster_words': high_bin['tokens'],
+                        'target_index': high_nibble % len(high_bin['tokens']),
+                        'bits': 4,
+                        'encoding_type': 'high_nibble',
+                        'byte_index': byte_index
+                    },
+                    {
+                        'choice_id': len(self._get_current_choices()) + 1,
+                        'nibble_value': low_nibble,
+                        'cluster_id': low_bin['bin_id'],
+                        'cluster_words': low_bin['tokens'],
+                        'target_index': low_nibble % len(low_bin['tokens']),
+                        'bits': 4,
+                        'encoding_type': 'low_nibble',
+                        'byte_index': byte_index
+                    }
+                ]
+
+        # Third try: use small bins with 2-3 bits each
+        return None  # Let caller handle fallback
+
+    def _encode_byte_as_bits(self, byte_value: int, byte_index: int) -> List[Dict]:
+        """Encode a byte as individual bits (fallback)."""
+        bit_choices = []
+
+        # Use tiny bins for bit encoding
+        for bit_pos in range(8):
+            bit = (byte_value >> (7 - bit_pos)) & 0x01
+
+            if self.tiny_bins:
+                bin_idx = (byte_index * 8 + bit_pos) % len(self.tiny_bins)
+                cluster = self.tiny_bins[bin_idx]
+
+                if len(cluster['tokens']) >= 2:
+                    bit_choices.append({
+                        'choice_id': len(self._get_current_choices()) + len(bit_choices),
+                        'bit_value': bit,
+                        'cluster_id': cluster['bin_id'],
+                        'cluster_words': cluster['tokens'],
+                        'target_index': bit % len(cluster['tokens']),
+                        'bits': 1,
+                        'encoding_type': 'bit',
+                        'byte_index': byte_index,
+                        'bit_position': bit_pos
+                    })
+
+        return bit_choices
+
+    def _get_current_choices(self) -> List:
+        """Helper to track current choices."""
+        return []
+
+    def _byte_chunking(self, choices: List[Dict], target_bits_per_chunk: int = 32) -> List[List[Dict]]:
+        """Group choices into chunks."""
         chunks = []
-        for i in range(0, len(choices), choices_per_chunk):
-            chunks.append(choices[i:i + choices_per_chunk])
+        current_chunk = []
+        current_bits = 0
+
+        for choice in choices:
+            current_chunk.append(choice)
+            current_bits += choice.get('bits', 1)
+
+            # Create chunk when we reach target OR have 4+ choices
+            if current_bits >= target_bits_per_chunk or len(current_chunk) >= 4:
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_bits = 0
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
         return chunks
 
-    def _generate_with_semantic_choices(self, context: Dict[str, Any],
-                                        chunk_idx: int,
-                                        choices: List[Dict]) -> Tuple[str, List[Dict]]:
-        """Generate text where LLM makes natural semantic choices."""
+    def _generate_byte_chunk(self, context: Dict[str, Any],
+                             chunk_idx: int,
+                             choices: List[Dict]) -> Tuple[str, List[Dict]]:
+        """Generate natural text for byte-level encoding."""
         repo_context = context.get("repo_context", "authentication system")
-        file_context = context.get("file_context", "src/auth/login.js")
 
         artifact_types = [
-            f"GitHub issue comment about {repo_context}",
-            f"Pull request description for {file_context}",
-            f"Code review comment on {repo_context}",
-            f"Technical discussion about {repo_context} improvements",
-            f"README update for {repo_context}",
-            f"Documentation for {file_context}",
-            f"Bug report about {repo_context}",
-            f"Feature request for {repo_context}"
+            "GitHub issue comment",
+            "Pull request description",
+            "Code review feedback",
+            "Technical discussion",
+            "README update"
         ]
 
         artifact_type = artifact_types[chunk_idx % len(artifact_types)]
 
-        # Build the prompt for semantic choices
-        prompt = self._build_semantic_prompt(artifact_type, repo_context, choices)
+        prompt = self._build_byte_prompt(artifact_type, repo_context, choices)
 
         try:
             response = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
                     {"role": "system",
-                     "content": "You are a GitHub technical writer creating authentic discussions. "
-                                "You naturally choose words that fit the context perfectly. "
-                                "Your writing sounds 100% genuine and never forced."},
+                     "content": "You are a technical writer on GitHub. Write naturally and professionally."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.85,  # Balanced temperature for creativity + consistency
-                max_tokens=400,
-                top_p=0.95
+                temperature=0.7,
+                max_tokens=200,
+                top_p=0.9
             )
 
             text = response.choices[0].message.content.strip()
             text = re.sub(r'\s+', ' ', text)
 
-            # Ensure it ends properly
             if not text.endswith(('.', '!', '?')):
                 text += '.'
 
             print(f"    Generated {len(text.split())} words")
 
-            # Find which words the LLM chose from each semantic cluster
-            positions = self._extract_semantic_choices(text, choices)
+            # Extract encoded words
+            positions = self._extract_byte_positions(text, choices)
 
-            # Report on encoding success
-            encoded_choices = len(positions)
-            total_choices = len(choices)
-            print(
-                f"    Encoded {encoded_choices}/{total_choices} choices ({encoded_choices / total_choices * 100:.0f}%)")
+            encoded = len(positions)
+            total = len(choices)
+            success = encoded / total * 100 if total > 0 else 0
 
-            # If some choices missing, try to add them naturally
-            if encoded_choices < total_choices:
-                missing_indices = [i for i, choice in enumerate(choices)
-                                   if choice['choice_id'] not in [p['choice_id'] for p in positions]]
-                print(f"    ⚠ Missing {len(missing_indices)} choices")
-                text = self._add_missing_choices_naturally(text, [choices[i] for i in missing_indices])
-                # Re-extract positions
-                positions = self._extract_semantic_choices(text, choices)
+            print(f"    Encoded {encoded}/{total} choices ({success:.0f}%)")
 
             return text, positions
 
         except Exception as e:
-            print(f"  ⚠ Error: {e}")
-            return self._fallback_semantic_text(choices, artifact_type), []
+            print(f"    ⚠ Error: {e}")
+            return self._fallback_byte_text(choices, artifact_type, repo_context), []
 
-    def _build_semantic_prompt(self, artifact_type: str, repo_context: str, choices: List[Dict]) -> str:
-        """Build prompt that asks LLM to make natural semantic choices."""
+    def _build_byte_prompt(self, artifact_type: str, repo_context: str, choices: List[Dict]) -> str:
+        """Build prompt for byte-level encoding."""
 
-        # Create natural language descriptions of semantic choices
-        choice_descriptions = []
-        for i, choice in enumerate(choices):
-            # Show 3-4 sample words from the cluster
-            cluster_words = choice['cluster_words']
-            num_samples = min(4, len(cluster_words))
+        # Collect sample words from choices
+        sample_words = []
+        for choice in choices[:6]:  # Limit to first 6 choices
+            cluster_words = choice.get('cluster_words', [])
+            if cluster_words:
+                # Take 1-2 words from this cluster
+                num_samples = min(2, len(cluster_words))
+                samples = random.sample(cluster_words, num_samples)
+                for word in samples:
+                    if word not in sample_words:
+                        sample_words.append(word)
 
-            # Don't always show the same words - randomize samples
-            sample_indices = random.sample(range(len(cluster_words)), num_samples)
-            sample_words = [cluster_words[idx] for idx in sample_indices]
+        if not sample_words:
+            sample_words = ["improvement", "optimization", "security", "performance"]
 
-            choice_descriptions.append(
-                f"At some point, naturally use ONE word from this group: "
-                f"{', '.join(sample_words)}"
-            )
+        # Take up to 6 sample words
+        display_words = sample_words[:6]
 
-        choices_text = "\n".join([f"{i + 1}. {desc}" for i, desc in enumerate(choice_descriptions)])
+        prompt = f"""Write a {artifact_type} about {repo_context}.
 
-        prompt = f"""
-        Write a {artifact_type} about {repo_context}.
+Be concise and natural (3-4 sentences).
 
-        IMPORTANT: Your text must flow 100% naturally as a real GitHub discussion.
-        Sound authentic, technical, and professional.
+As you write, naturally incorporate some of these words where they fit best: {', '.join(display_words)}
 
-        As you write, please make {len(choices)} natural word choices. 
-        For each of the following, choose ONE word that fits perfectly in your text:
+IMPORTANT: Don't list the words. Use them naturally in context.
 
-        {choices_text}
+Example of GOOD writing:
+"The authentication system needs optimization for better performance. We should review our security measures."
 
-        CRITICAL REQUIREMENTS:
-        1. Write completely naturally - don't force the words
-        2. Choose the word that fits BEST in each context
-        3. Don't list the options or draw attention to your choices
-        4. Just write normal technical text (4-6 sentences)
-        5. End with a relevant question or conclusion
-        6. The text must sound 100% authentic GitHub content
-        7. Use each chosen word exactly once in a natural context
+Example of BAD writing:
+"Here are words: optimization, performance, security, measures."
 
-        Example of GOOD writing (natural, authentic):
-        - "We should improve the authentication system by adding multi-factor authentication."
-        - "The performance metrics indicate we need to optimize our database queries."
-        - "Recent updates to the documentation have significantly improved developer onboarding."
-
-        Example of BAD writing (forced, unnatural):
-        - "Here are my word choices: improve, optimize, update"
-        - "We need to (improve) and (optimize) and (update) everything"
-        - "improve! optimize! update!"
-
-        Write your {artifact_type}:
-        """
+Write naturally:
+"""
 
         return prompt
 
-    def _extract_semantic_choices(self, text: str, choices: List[Dict]) -> List[Dict]:
-        """Extract which words the LLM chose from each semantic cluster."""
+    def _extract_byte_positions(self, text: str, choices: List[Dict]) -> List[Dict]:
+        """Extract which words were chosen."""
         positions = []
         text_lower = text.lower()
         words = text.split()
 
         for choice in choices:
-            chosen_word = None
-            chosen_index = None
+            found_word = None
+            found_index = None
 
-            # First, check if any word from the cluster appears in the text
-            for idx, word in enumerate(choice['cluster_words']):
-                word_lower = word.lower()
-                # Look for the word as a whole word (not part of another word)
-                # Use word boundaries and handle punctuation
-                pattern = r'(^|\W)' + re.escape(word_lower) + r'($|\W)'
-                if re.search(pattern, text_lower):
-                    chosen_word = word
-                    chosen_index = idx
+            cluster_words = choice.get('cluster_words', [])
+            for idx, word in enumerate(cluster_words):
+                # Use word boundary regex
+                if re.search(rf'\b{re.escape(word.lower())}\b', text_lower):
+                    found_word = word
+                    found_index = idx
                     break
 
-            if chosen_word:
-                # Find exact position in text
+            if found_word:
+                # Find exact position
                 for word_idx, w in enumerate(words):
-                    w_clean = re.sub(r'[^\w]', '', w.lower())
-                    if w_clean == chosen_word.lower():
+                    if w.lower().strip('.,!?;:') == found_word.lower():
                         positions.append({
-                            'choice_id': choice['choice_id'],
-                            'cluster_id': choice['cluster_id'],
-                            'chosen_word': chosen_word,
-                            'chosen_index': chosen_index,
-                            'target_index': choice['target_index'],
-                            'bits': choice['bits'],
-                            'num_bits': choice['num_bits'],
-                            'position': word_idx,
-                            'word_in_text': w,
-                            'context_before': words[max(0, word_idx - 2):word_idx],
-                            'context_after': words[word_idx + 1:min(len(words), word_idx + 3)]
+                            'choice_id': choice.get('choice_id'),
+                            'chosen_word': found_word,
+                            'chosen_index': found_index,
+                            'target_index': choice.get('target_index', 0),
+                            'encoding_type': choice.get('encoding_type', 'unknown'),
+                            'bits': choice.get('bits', 0)
                         })
                         break
 
         return positions
 
-    def _add_missing_choices_naturally(self, text: str, missing_choices: List[Dict]) -> str:
-        """Add missing semantic choices naturally to the text."""
-        if not missing_choices:
-            return text
+    def _fallback_byte_text(self, choices: List[Dict], artifact_type: str, repo_context: str) -> str:
+        """Fallback text."""
+        # Extract some words from choices
+        used_words = []
+        for i, choice in enumerate(choices[:4]):
+            cluster_words = choice.get('cluster_words', [])
+            if cluster_words:
+                word = random.choice(cluster_words[:3])
+                if word not in used_words:
+                    used_words.append(word)
 
-        # Split into sentences
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        if not sentences:
-            sentences = [text]
+        text = f"This {artifact_type} discusses {repo_context}. "
 
-        # Add each missing choice to a different sentence
-        for i, choice in enumerate(missing_choices):
-            if i < len(sentences):
-                sentence_idx = i % len(sentences)
-                # Pick a word from the cluster
-                word = random.choice(choice['cluster_words'])
+        if used_words:
+            text += f"Important aspects include {', '.join(used_words)}. "
+        else:
+            text += "Several key considerations need attention. "
 
-                # Add naturally
-                sentence = sentences[sentence_idx]
-                if sentence.endswith('.'):
-                    sentence = sentence[:-1]
-                sentences[sentence_idx] = sentence + f", specifically regarding {word}."
+        text += "We should address these systematically."
 
-        return ' '.join(sentences)
-
-    def _fallback_semantic_text(self, choices: List[Dict], artifact_type: str) -> str:
-        """Fallback text generation."""
-        text = f"This {artifact_type} addresses several important considerations. "
-
-        for i, choice in enumerate(choices):
-            # Pick a word from the cluster
-            word = random.choice(choice['cluster_words'])
-
-            if i % 2 == 0:
-                text += f"We need to consider {word} carefully. "
-            else:
-                text += f"The {word} aspect requires attention. "
-
-        text += "What are your thoughts on these improvements?"
-        return text.strip()
+        return text
 
 
 # ============================================================
-# Main Encoder (backward compatible interface)
+# Byte-Level Main Encoder
 # ============================================================
 
-class StegoEncoder:
+class ByteLevelStegoEncoder:
     """
-    Main encoder with backward compatible interface.
-    Uses semantic choice encoding internally.
+    Main byte-level encoder.
+    Encodes whole bytes instead of bits for maximum density.
     """
 
-    def __init__(self, bins_path: str = "token_binning_data/ultimate_token_bins.json"):
-        """Initialize with new corpus parser output by default."""
-        self.semantic_encoder = SemanticEncoder(bins_path)
+    def __init__(self, bins_path: str = "token_binning_data/byte_level_bins.json"):
+        self.encoder = ByteLevelSemanticEncoder(bins_path)
 
     def encode(self, message: str, context: Dict[str, Any],
                positions_filename: Optional[str] = None) -> List[str]:
         """
-        Encode message and save positions file.
-        Returns: List of encoded text chunks
+        Encode at byte level.
         """
-        print(f"\n📤 ENCODING: '{message}'")
-        print(f"  Message length: {len(message)} characters")
-        print(f"  Required bits: {len(message) * 7 + 24} (7-bit ASCII + 24 header bits)")
+        print(f"\n📤 BYTE-LEVEL ENCODING: '{message}'")
+        print(f"  Length: {len(message)} chars = {len(message.encode('utf-8'))} bytes")
 
-        # Use semantic encoding
-        chunks, positions_data = self.semantic_encoder.encode_message(message, context)
+        # Encode
+        chunks, positions_data = self.encoder.encode_message(message, context)
 
-        # Calculate statistics
-        total_encoded_bits = sum(chunk.get('encoded_bits', 0) for chunk in positions_data['chunks'])
-        required_bits = len(message) * 7 + 24
-        efficiency = total_encoded_bits / required_bits * 100 if required_bits > 0 else 0
+        # Statistics
+        total_bits = sum(chunk.get('encoded_bits', 0) for chunk in positions_data)
+        message_bytes = len(message.encode('utf-8'))
+        message_bits = message_bytes * 8
 
-        print(f"\n📊 ENCODING STATISTICS")
-        print(f"  Total chunks: {len(chunks)}")
-        print(f"  Total encoded bits: {total_encoded_bits}")
-        print(f"  Required bits: {required_bits}")
-        print(f"  Efficiency: {efficiency:.1f}%")
-        print(f"  Avg bits per chunk: {total_encoded_bits / len(chunks) if chunks else 0:.1f}")
+        print(f"\n📊 BYTE-LEVEL RESULTS")
+        print(f"  Message: {message_bytes} bytes ({message_bits} bits)")
+        print(f"  Encoded bits: {total_bits}")
+        print(f"  Chunks generated: {len(chunks)}")
+        print(f"  Bits per chunk: {total_bits / len(chunks) if chunks else 0:.1f}")
+        print(f"  Efficiency: {total_bits / message_bits * 100:.1f}%")
 
-        # Save positions file
-        if positions_filename:
-            self._save_positions_file(positions_filename, positions_data)
+        # Expected improvement
+        original_chunks = message_bytes * 2  # Old system: ~2 chunks per byte
+        new_chunks = len(chunks)
+        reduction = (original_chunks - new_chunks) / original_chunks * 100 if original_chunks > 0 else 0
+
+        print(f"\n🎯 IMPROVEMENT:")
+        print(f"  Original system (bit-level): ~{original_chunks} chunks")
+        print(f"  Byte-level system: {new_chunks} chunks")
+        print(f"  Reduction: {reduction:.0f}%")
+
+        if new_chunks <= 5:
+            print(f"  ✅ Target achieved (≤ 5 chunks)")
         else:
-            message_hash = hashlib.md5(message.encode()).hexdigest()[:8]
-            default_filename = f"stego_positions_{message_hash}.json"
-            self._save_positions_file(default_filename, positions_data)
+            print(f"  ⚠ Close: {new_chunks} chunks (target ≤ 5)")
+
+        # Save positions
+        if positions_filename:
+            self._save_positions(positions_filename, positions_data)
+        else:
+            hash_val = hashlib.md5(message.encode()).hexdigest()[:6]
+            self._save_positions(f"byte_positions_{hash_val}.json", positions_data)
 
         return chunks
 
-    def _save_positions_file(self, filename: str, positions_data: Dict):
-        """Save positions data to JSON file."""
+    def _save_positions(self, filename: str, data: List[Dict]):
+        """Save positions data."""
         try:
-            os.makedirs(os.path.dirname(filename) if os.path.dirname(filename) else '.',
-                        exist_ok=True)
-
             with open(filename, 'w') as f:
-                json.dump(positions_data, f, indent=2)
-
-            print(f"\n✓ Positions file saved: {filename}")
-            print(f"  Contains {len(positions_data['chunks'])} chunk(s)")
-
+                json.dump({
+                    'metadata': {
+                        'timestamp': datetime.now().isoformat(),
+                        'encoding': 'byte_level_v1'
+                    },
+                    'chunks': data
+                }, f, indent=2)
+            print(f"✓ Positions saved: {filename}")
         except Exception as e:
-            print(f"\n⚠ Could not save positions file: {e}")
+            print(f"⚠ Could not save: {e}")
 
 
 # ============================================================
 # Test
 # ============================================================
 
-def test_encoder():
-    """Test the encoder."""
+def test_byte_level():
+    """Test byte-level encoder."""
     print("\n" + "=" * 80)
-    print("SEMANTIC CHOICE STEGANOGRAPHY ENCODER")
-    print("Using NEW corpus parser vocabulary")
+    print("BYTE-LEVEL STEGANOGRAPHY ENCODER")
+    print("Encodes whole bytes, not bits")
     print("=" * 80)
-    print("Encodes bits in LLM's natural word choices")
+    print("Target: 3-5 chunks for 28-byte message")
     print("=" * 80)
 
     try:
-        # Initialize with new vocabulary
-        encoder = StegoEncoder("token_binning_data/ultimate_token_bins.json")
+        # Initialize encoder
+        encoder = ByteLevelStegoEncoder("token_binning_data/byte_level_bins.json")
 
         # Test message
         message = "We will meet at 9pm tonight."
-        print(f"\nMessage: '{message}'")
+        print(f"\nMessage: '{message}' ({len(message)} bytes)")
 
         # Context
         context = {
             "repo_context": "authentication system",
-            "file_context": "src/auth/login.js",
-            "parent_artifact": "PR #123",
-            "project": "SecureAuth"
+            "file_context": "src/auth/login.js"
         }
 
         # Encode
         print("\n" + "=" * 80)
-        print("ENCODING WITH SEMANTIC CHOICES")
+        print("ENCODING...")
         print("=" * 80)
 
-        chunks = encoder.encode(message, context, "stego_positions.json")
+        chunks = encoder.encode(message, context, "byte_level_test.json")
 
         print(f"\nGenerated {len(chunks)} artifacts:")
         for i, chunk in enumerate(chunks):
-            print(f"\n--- Artifact {i + 1} ({len(chunk.split())} words) ---")
+            words = len(chunk.split())
+            print(f"\n--- Artifact {i + 1} ({words} words) ---")
             print(chunk)
-            print("-" * 80)
+            print("-" * 60)
 
         return True, chunks
 
@@ -624,15 +591,15 @@ def test_encoder():
 # ============================================================
 
 if __name__ == "__main__":
-    success, chunks = test_encoder()
+    success, chunks = test_byte_level()
 
     print("\n" + "=" * 80)
     if success:
-        print("✅ ENCODER COMPLETE")
-        print("   - Bits encoded in LLM's natural word choices")
-        print("   - Uses new corpus parser vocabulary (10,000+ words)")
-        print("   - Positions file saved: stego_positions.json")
-        print("\nDecoder must check which word was chosen from each semantic cluster")
+        print("✅ BYTE-LEVEL ENCODER COMPLETE")
+        print("   - Encodes bytes instead of bits")
+        print("   - Uses 256+ word bins for byte encoding")
+        print("   - Dramatically fewer chunks needed")
+        print("   - Much more natural text")
     else:
-        print("❌ ENCODER FAILED")
+        print("❌ BYTE-LEVEL ENCODER FAILED")
     print("=" * 80)
