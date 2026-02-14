@@ -1,264 +1,645 @@
 #!/usr/bin/env python3
 """
-BYTE-LEVEL CORPUS PARSER
-Creates bins optimized for byte-level encoding (256+ words per bin)
+LLM-POWERED SYNONYM BINNING - BATCH API WITH INFINITE RETRY
+NO FALLBACKS. NO GIVING UP. Retry forever until LLM outputs valid JSON.
+The LLM decides. We wait. We obey.
 """
 
-import json
 import os
 import re
-import math
-import sys
-from collections import defaultdict, Counter
-from typing import Dict, List, Set, Tuple, Any
+import json
+import argparse
 import time
+import hashlib
+import pickle
+from collections import Counter, defaultdict
+from typing import List, Tuple, Dict, Optional
+import numpy as np
+from tqdm import tqdm
+from pathlib import Path
 
-print("=" * 80)
-print("BYTE-LEVEL CORPUS PARSER")
-print("Creates 256+ word bins for byte-level encoding")
-print("=" * 80)
+# ----------------------------------------------------------------------
+# NLP & ML
+# ----------------------------------------------------------------------
+try:
+    import nltk
+    from nltk import pos_tag
+
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)
+    NLTK_AVAILABLE = True
+except ImportError:
+    print("ERROR: install nltk: pip install nltk")
+    exit(1)
+
+try:
+    from sentence_transformers import SentenceTransformer
+
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    print("ERROR: install sentence-transformers: pip install sentence-transformers")
+    exit(1)
+
+try:
+    import hdbscan
+
+    HDBSCAN_AVAILABLE = True
+except ImportError:
+    print("ERROR: install hdbscan: pip install hdbscan")
+    exit(1)
+
+# ----------------------------------------------------------------------
+# OpenAI API - BATCH API ONLY
+# ----------------------------------------------------------------------
+try:
+    from openai import OpenAI
+
+    OPENAI_AVAILABLE = True
+except ImportError:
+    print("ERROR: install openai: pip install openai")
+    exit(1)
+
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+if not client.api_key:
+    print("ERROR: Please set environment variable OPENAI_API_KEY")
+    exit(1)
+
+# ----------------------------------------------------------------------
+# Cache for LLM results
+# ----------------------------------------------------------------------
+FILTER_CACHE_FILE = "llm_filter_cache.pkl"
 
 
-class ByteLevelCorpusProcessor:
-    """Processes corpus to create byte-level bins (256+ words each)."""
-
-    def __init__(self, data_path: str = "data/corpus.json"):
-        self.data_path = data_path
-        self.all_words = []
-
-    def process_corpus(self) -> List[List[str]]:
-        """Process corpus and create byte-level bins."""
-        print("Processing corpus for byte-level bins...")
-
-        # Load all words from corpus
-        self._load_all_words()
-
-        if len(self.all_words) < 10000:
-            print(f"⚠ Warning: Only {len(self.all_words)} unique words")
-            print("  You may need more corpus data for byte-level encoding")
-
-        # Create byte-level bins
-        bins = self._create_byte_level_bins()
-
-        return bins
-
-    def _load_all_words(self):
-        """Load all unique words from corpus."""
-        words_set = set()
-        line_count = 0
-
+def load_cache():
+    if os.path.exists(FILTER_CACHE_FILE):
         try:
-            with open(self.data_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line_count += 1
-                    try:
-                        data = json.loads(line)
-                        text = self._extract_text(data)
+            with open(FILTER_CACHE_FILE, 'rb') as f:
+                return pickle.load(f)
+        except:
+            return {}
+    return {}
 
-                        # Extract words
-                        line_words = re.findall(r'\b[a-z][a-z0-9_\-]{2,25}\b', text.lower())
-                        words_set.update(line_words)
 
-                    except (json.JSONDecodeError, KeyError, TypeError):
-                        continue
+def save_cache(cache):
+    with open(FILTER_CACHE_FILE, 'wb') as f:
+        pickle.dump(cache, f)
 
-            print(f"  Processed {line_count:,} lines")
-            print(f"  Found {len(words_set):,} unique words")
 
-            # Remove common stopwords
-            stopwords = {
-                'the', 'and', 'for', 'are', 'was', 'were', 'this', 'that', 'with',
-                'have', 'has', 'had', 'you', 'your', 'they', 'their', 'there',
-                'a', 'an', 'to', 'in', 'of', 'it', 'is', 'be', 'as', 'at', 'by',
-                'on', 'or', 'but', 'not', 'so', 'if', 'then', 'else', 'do', 'does'
+# ----------------------------------------------------------------------
+# AGGRESSIVE JSON EXTRACTION - NO FALLBACKS, JUST EXTRACT OR FAIL
+# ----------------------------------------------------------------------
+def extract_json_array(text: str) -> Optional[List]:
+    """Extract a JSON array from text. Returns None if not found."""
+    # Remove markdown code blocks
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*', '', text)
+
+    # Find the first '[' and last ']'
+    start = text.find('[')
+    end = text.rfind(']')
+
+    if start == -1 or end == -1:
+        return None
+
+    json_str = text[start:end + 1]
+
+    # Clean common issues
+    json_str = re.sub(r',\s*]', ']', json_str)
+    json_str = re.sub(r',\s*}', '}', json_str)
+    json_str = re.sub(r'\n', '', json_str)
+    json_str = re.sub(r'\s+', ' ', json_str)
+
+    try:
+        return json.loads(json_str)
+    except:
+        try:
+            return json.loads(json_str.replace("'", '"'))
+        except:
+            return None
+
+
+# ----------------------------------------------------------------------
+# PHASE 1: SCAN CORPUS - NO FILTERING, LET LLM DECIDE EVERYTHING
+# ----------------------------------------------------------------------
+def scan_corpus(data_path: str, min_freq: int = 5) -> Tuple[Counter, List[str]]:
+    """Scan corpus and extract ALL tokens for LLM to validate."""
+    print("=" * 60)
+    print("PHASE 1: Scanning corpus - NO FILTERING")
+    print("=" * 60)
+    print("The LLM will decide what's valid. No pre-filtering applied.")
+
+    freq = Counter()
+    with open(data_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in tqdm(f, desc="Scanning"):
+            try:
+                d = json.loads(line)
+                text = d.get("artifact_text", "")
+                # Simple tokenization - split on whitespace and punctuation
+                tokens = re.findall(r'\b[a-zA-Z0-9_.-]+\b', text)
+                for token in tokens:
+                    # Basic cleaning
+                    token = token.strip('._-')
+                    if 2 <= len(token) <= 50:  # Very broad length constraints
+                        freq[token] += 1  # ← REMOVED .lower()!
+            except:
+                continue
+
+    print(f"Unique tokens before LLM validation: {len(freq):,}")
+
+    # ✅ TAKE ALL WORDS - let LLM decide everything
+    candidates = [w for w, c in freq.most_common() if c >= min_freq]
+    print(f"Candidates for LLM validation: {len(candidates):,}")
+
+    # Save candidates
+    with open("candidates.json", "w") as f:
+        json.dump(candidates, f)
+    print(f"✓ Saved candidates.json")
+
+    return freq, candidates
+
+
+# ----------------------------------------------------------------------
+# PHASE 2: CREATE AND SUBMIT BATCH - INFINITE RETRY ON FAILURE
+# ----------------------------------------------------------------------
+def create_validation_batch(candidates: List[str], batch_size: int = 40):  # 🔥 40 WORDS PER BATCH
+    """Create a batch file for OpenAI Batch API."""
+    cache = load_cache()
+
+    # Only include uncached batches
+    uncached_batches = []
+    uncached_indices = []
+
+    for i in range(0, len(candidates), batch_size):
+        batch = candidates[i:i + batch_size]
+        cache_key = hashlib.md5(','.join(sorted(batch)).encode()).hexdigest()
+        if cache_key not in cache:
+            uncached_batches.append(batch)
+            uncached_indices.append(i)
+
+    if not uncached_batches:
+        print("✓ All batches already cached!")
+        return None, []
+
+    print(f"Creating batch file with {len(uncached_batches)} uncached batches...")
+
+    batch_file_path = "batch_requests.jsonl"
+    with open(batch_file_path, "w") as f:
+        for idx, batch in enumerate(uncached_batches):
+            words_str = "\n".join([f"{i + 1}. {w}" for i, w in enumerate(batch)])
+
+            # ============================================================
+            # ✅ ULTRA INCLUSIVE PROMPT - LLM DECIDES EVERYTHING
+            # ============================================================
+            prompt = f"""You are building a high-quality English vocabulary.
+
+            Classify each token as VALID (true) or INVALID (false).
+
+            IMPORTANT - PRIORITIZE BY FREQUENCY:
+            - Words appearing EARLIER in the list are MORE FREQUENT in real text
+            - Be MORE LIKELY to accept frequent words (top of list)
+            - Be MORE STRICT with rare words (bottom of list)
+
+            ========== RULES - FOLLOW EXACTLY ==========
+
+            ✅ VALID - KEEP THESE:
+            1. Real English words (run, happy, quickly, the, cat)
+            2. Technical terms (refcell, cffi, socketservice, stdpar)
+            3. Programming languages, frameworks, libraries (react, django, pytorch)
+            4. Compound words that are supposed to be compound (websocket, dockerfile, gitignore) - not (bunnyhappy)
+            5. Domain terminology (database, container, kubernetes)
+            6. Jargon, slang, informal terms (executive, flamegraph)
+            7. Any real word or name [With the exception of those in the INVALID category below].
+
+            ⚠️ ACRONYMS - KEEP ONLY IF WIDELY RECOGNIZED:
+            - KEEP: http, tls, ssl, api, sdk, cli, dns, tcp, udp, ip, json, xml
+            - REJECT: aaac, aab, aacd, aada, aadb, aadd, aadf, aae, aaeb, aaee, aafa, aafc, aafd
+
+            ❌ INVALID - REJECT THESE - NO EXCEPTIONS. These might be real words, names, or terms or not, but you still REJECT. 
+            1. Version numbers: ANY format with dots (1.2.3, v4.5.6, 2023.01.15, 0.1.5, 1.0.0-beta)
+            2. Pure numbers: 123, 456, 7890
+            3. Hex strings: a1b2c3d4e5, 7e8f9a0b1c2d3e4f, 0x13bf9369
+            4. Keyboard gibberish: zhdguvy, ywluzxiilcj, yxnjcmlwdcjdfq
+            5. No-vowel strings: qwrtplmn, xzcvbnm, lwzlyxr
+            6. File paths: home/user, C:\\windows, /usr/bin
+            7. URLs: http://, https://, git@, ssh://
+            8. Personal names: benslabbert, fredericbarthelet, antoniovazquezblanco, Emily Sugowski, Amy, Bob
+            9. Bot names: anything ending in 'bot' or containing '[bot]'
+            10. Anything that looks like it was encoded or is a hash. 
+            11. Specific package names, module names, project names that appear personal or aren't publically known/used on the web [For instance, programming-class-101-final]
+
+            ========== DECISION TREE ========== 
+            [Just an example, not inclusive of every single decision you might need to make]
+            1. Does it look like a version number? → REJECT
+            2. Does it contain numbers? → REJECT
+            3. Is it pure gibberish? → REJECT
+            4. Could it be a real word/term that isn't a url, file path, non-vowel string, hex string, version number, personal name, encoded/hashed text? → KEEP
+
+            Return ONLY a JSON array of {batch_size} booleans in exact order.
+
+            Tokens (ordered by frequency, most frequent first):
+            {words_str}"""
+
+            request = {
+                "custom_id": f"batch_{uncached_indices[idx]}",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": 4000
+                }
             }
+            f.write(json.dumps(request) + "\n")
 
-            filtered_words = [w for w in words_set if w not in stopwords]
-            self.all_words = sorted(filtered_words)
+    print(f"✓ Created {batch_file_path} with {len(uncached_batches)} requests")
+    return batch_file_path, uncached_indices
 
-            print(f"  After stopword removal: {len(self.all_words):,} words")
+
+def submit_batch_with_retry(batch_file_path: str) -> str:
+    """Submit batch file to OpenAI. Retry forever on failure."""
+    print("\n" + "=" * 60)
+    print("PHASE 2: Submitting batch to OpenAI")
+    print("=" * 60)
+
+    attempt = 1
+    while True:
+        try:
+            # Upload file
+            print(f"Uploading batch file (attempt {attempt})...")
+            batch_file = client.files.create(
+                file=open(batch_file_path, "rb"),
+                purpose="batch"
+            )
+            print(f"✓ Uploaded: {batch_file.id}")
+
+            # Create batch job
+            print("Creating batch job...")
+            batch_job = client.batches.create(
+                input_file_id=batch_file.id,
+                endpoint="/v1/chat/completions",
+                completion_window="24h"
+            )
+            print(f"✓ Batch submitted: {batch_job.id}")
+            print(f"  Status: {batch_job.status}")
+            print(f"\nBatch ID: {batch_job.id}")
+            print("\nNO FALLBACKS. NO GIVING UP. The LLM decides.")
+            print("Check status with:")
+            print(f"  python3 corpus_parser.py --phase status --batch-id {batch_job.id}")
+
+            return batch_job.id
 
         except Exception as e:
-            print(f"❌ Error loading corpus: {e}")
-            # Create synthetic words for testing
-            self.all_words = [f"word_{i:04d}" for i in range(20000)]
-            print(f"  Created {len(self.all_words)} synthetic words for testing")
+            print(f"⚠ Submission failed (attempt {attempt}): {e}")
+            attempt += 1
+            wait_time = min(60 * attempt, 3600)
+            print(f"  Retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
 
-    def _extract_text(self, data: Any) -> str:
-        """Extract text from JSON data."""
-        if isinstance(data, str):
-            return data
-        if isinstance(data, dict):
-            text_parts = []
-            for key in ['artifact_text', 'text', 'body', 'content', 'message', 'description']:
-                if key in data and data[key]:
-                    text_parts.append(str(data[key]))
-            return ' '.join(text_parts)
-        return ""
 
-    def _create_byte_level_bins(self) -> List[List[str]]:
-        """Create bins optimized for byte-level encoding."""
-        print("\nCreating byte-level bins...")
+# ----------------------------------------------------------------------
+# PHASE 3: CHECK BATCH STATUS - POLL FOREVER UNTIL COMPLETE
+# ----------------------------------------------------------------------
+def wait_for_batch_completion(batch_id: str) -> Dict:
+    """Poll batch status forever until completed."""
+    print("\n" + "=" * 60)
+    print(f"PHASE 3: Waiting for batch {batch_id} to complete")
+    print("=" * 60)
+    print("NO FALLBACKS. NO TIMEOUTS. We wait as long as it takes.")
+    print("Press Ctrl+C to check status manually.\n")
 
-        all_bins = []
-        total_words = len(self.all_words)
+    check_interval = 30
+    last_status = None
 
-        # Strategy: Create bins of different sizes for maximum flexibility
-        # 1. Large bins (256+ words) for byte encoding
-        # 2. Medium bins (64-128 words) for 6-7 bit encoding
-        # 3. Small bins (16-32 words) for 4-5 bit encoding
-        # 4. Tiny bins (4-8 words) for fallback
+    while True:
+        try:
+            batch_job = client.batches.retrieve(batch_id)
+            status = batch_job.status
+            completed = batch_job.request_counts.completed
+            total = batch_job.request_counts.total
+            failed = batch_job.request_counts.failed
 
-        # Create large bins first (256 words each)
-        large_bin_count = min(20, total_words // 256)
-        for i in range(large_bin_count):
-            start_idx = i * 256
-            end_idx = start_idx + 256
-            if end_idx <= total_words:
-                bin_words = self.all_words[start_idx:end_idx]
-                all_bins.append(bin_words)
+            if status != last_status:
+                print(
+                    f"[{time.strftime('%H:%M:%S')}] Status: {status.upper()} - {completed}/{total} completed, {failed} failed")
+                last_status = status
 
-        print(f"  Created {large_bin_count} large bins (256 words each)")
+            if status == "completed":
+                print(f"\n✅ Batch completed successfully!")
+                print(f"  Total requests: {total}")
+                print(f"  Completed: {completed}")
+                print(f"  Failed: {failed}")
+                return {
+                    "status": status,
+                    "output_file_id": batch_job.output_file_id,
+                    "request_counts": batch_job.request_counts
+                }
 
-        # Create medium bins (64 words each)
-        remaining_idx = large_bin_count * 256
-        medium_bin_count = min(100, (total_words - remaining_idx) // 64)
+            if status == "failed":
+                print(f"\n❌ Batch failed: {batch_job.errors}")
+                print("Creating new batch and resubmitting...")
+                return {"status": "failed", "retry": True}
 
-        for i in range(medium_bin_count):
-            start_idx = remaining_idx + i * 64
-            end_idx = start_idx + 64
-            if end_idx <= total_words:
-                bin_words = self.all_words[start_idx:end_idx]
-                all_bins.append(bin_words)
-
-        print(f"  Created {medium_bin_count} medium bins (64 words each)")
-
-        # Create small bins (16 words each)
-        remaining_idx += medium_bin_count * 64
-        small_bin_count = min(200, (total_words - remaining_idx) // 16)
-
-        for i in range(small_bin_count):
-            start_idx = remaining_idx + i * 16
-            end_idx = start_idx + 16
-            if end_idx <= total_words:
-                bin_words = self.all_words[start_idx:end_idx]
-                all_bins.append(bin_words)
-
-        print(f"  Created {small_bin_count} small bins (16 words each)")
-
-        # Create tiny bins (8 words each) with remaining words
-        remaining_idx += small_bin_count * 16
-        remaining_words = self.all_words[remaining_idx:]
-
-        tiny_bin_count = min(300, len(remaining_words) // 8)
-        for i in range(tiny_bin_count):
-            start_idx = i * 8
-            end_idx = start_idx + 8
-            if end_idx <= len(remaining_words):
-                bin_words = remaining_words[start_idx:end_idx]
-                all_bins.append(bin_words)
-
-        print(f"  Created {tiny_bin_count} tiny bins (8 words each)")
-
-        # Calculate statistics
-        total_bins = len(all_bins)
-        total_bin_words = sum(len(b) for b in all_bins)
-        unique_bin_words = len(set(word for b in all_bins for word in b))
-
-        print(f"\n📊 BIN STATISTICS:")
-        print(f"  Total bins: {total_bins}")
-        print(f"  Total words in bins: {total_bin_words}")
-        print(f"  Unique words in bins: {unique_bin_words}")
-
-        # Count bins by size
-        size_counts = defaultdict(int)
-        for bin_words in all_bins:
-            size = len(bin_words)
-            if size >= 256:
-                size_counts['256+'] += 1
-            elif size >= 64:
-                size_counts['64-255'] += 1
-            elif size >= 16:
-                size_counts['16-63'] += 1
+            if completed > 0:
+                check_interval = 60
             else:
-                size_counts['2-15'] += 1
+                check_interval = min(check_interval * 1.5, 300)
 
-        print(f"\n📊 BIN SIZE DISTRIBUTION:")
-        for size_range, count in sorted(size_counts.items(), key=lambda x: x[0], reverse=True):
-            print(f"  {size_range} words: {count} bins")
+            time.sleep(check_interval)
 
-        # Calculate encoding capacity
-        total_bits = 0
-        for bin_words in all_bins:
-            if len(bin_words) >= 2:
-                bits = int(math.log2(len(bin_words)))
-                total_bits += bits
+        except KeyboardInterrupt:
+            print("\n\n" + "=" * 60)
+            print("BATCH STATUS")
+            print("=" * 60)
+            print(f"Batch ID: {batch_id}")
+            print(f"Check later with: python3 corpus_parser.py --phase status --batch-id {batch_id}")
+            return {"status": "interrupted", "batch_id": batch_id}
 
-        avg_bits = total_bits / total_bins if total_bins > 0 else 0
-        print(f"  Average bits per bin: {avg_bits:.2f}")
-        print(f"  Total encoding capacity: {total_bits} bits")
-
-        # Estimate chunks needed for typical message
-        typical_message_bits = 200  # ~25 character message
-        estimated_chunks = typical_message_bits / (avg_bits * 3) if avg_bits > 0 else 0  # Assume 3 choices per chunk
-
-        print(f"\n🎯 EXPECTED PERFORMANCE:")
-        print(f"  For 25-character message (~200 bits):")
-        print(f"  Estimated chunks needed: {estimated_chunks:.1f}")
-        print(f"  Target: 3-5 chunks (vs original 28)")
-
-        return all_bins
+        except Exception as e:
+            print(f"⚠ Error checking status: {e}")
+            print(f"  Retrying in {check_interval} seconds...")
+            time.sleep(check_interval)
 
 
-# ============================================================
-# MAIN
-# ============================================================
+# ----------------------------------------------------------------------
+# PHASE 4: RETRIEVE AND PROCESS RESULTS - FIXED WITH TRUNCATION
+# ----------------------------------------------------------------------
+def retrieve_results_with_retry(batch_id: str, candidates: List[str], batch_size: int = 40) -> List[str]:
+    """Retrieve and process batch results. Process EVERY batch with truncation."""
+    print("\n" + "=" * 60)
+    print("PHASE 4: Retrieving batch results")
+    print("=" * 60)
+    print("NO FALLBACKS. NO GIVING UP. We process EVERY batch.")
 
-def main():
-    """Main function to create byte-level bins."""
-    print("Creating byte-level bins for steganography...")
-    print("Target: Bins with 256+ words for byte-level encoding")
-    print("=" * 80)
+    cache = load_cache()
+    batches = [candidates[i:i + batch_size] for i in range(0, len(candidates), batch_size)]
+    start_indices = list(range(0, len(candidates), batch_size))
 
-    start_time = time.time()
+    # Get batch job
+    batch_job = client.batches.retrieve(batch_id)
 
-    processor = ByteLevelCorpusProcessor("data/corpus.json")
-    bins = processor.process_corpus()
+    if batch_job.status != "completed":
+        print(f"Batch not ready. Status: {batch_job.status}")
+        return []
 
-    if not bins:
-        print("❌ Failed to create bins")
-        return
+    # Get output file
+    result_file_id = batch_job.output_file_id
+    result = client.files.content(result_file_id).content
 
-    # Save bins
-    output_dir = "token_binning_data"
-    os.makedirs(output_dir, exist_ok=True)
+    # Parse ALL results
+    results_by_start_index = {}
+    for line in result.splitlines():
+        if line.strip():
+            data = json.loads(line)
+            custom_id = data.get("custom_id")
 
-    # Save comprehensive version
-    output_path = f"{output_dir}/byte_level_bins_comprehensive.json"
-    with open(output_path, 'w') as f:
+            if custom_id and custom_id.startswith("batch_"):
+                try:
+                    start_idx = int(custom_id.split("_")[1])
+                    response = data.get("response", {})
+                    body = response.get("body", {})
+                    choices = body.get("choices", [])
+
+                    if choices:
+                        content = choices[0].get("message", {}).get("content", "")
+                        result_array = extract_json_array(content)
+                        if result_array is not None:
+                            results_by_start_index[start_idx] = result_array
+                            print(f"  ✓ Loaded batch for start index: {start_idx} ({len(result_array)} booleans)")
+                except Exception as e:
+                    print(f"  ⚠ Error parsing custom_id {custom_id}: {e}")
+
+    # Process batches - CRITICAL FIX: TRUNCATE to batch_size
+    valid_words = []
+    for batch_idx, start_idx in enumerate(start_indices):
+        if start_idx in results_by_start_index:
+            result_array = results_by_start_index[start_idx]
+            batch = batches[batch_idx]
+
+            if len(result_array) >= len(batch):
+                result_array = result_array[:len(batch)]
+                cache_key = hashlib.md5(','.join(sorted(batch)).encode()).hexdigest()
+                bools = [bool(x) for x in result_array]
+                cache[cache_key] = bools
+
+                batch_valid = [batch[i] for i, v in enumerate(bools) if v]
+                valid_words.extend(batch_valid)
+                print(
+                    f"  ✓ Batch {batch_idx} (start={start_idx}): {len(batch_valid)}/{len(batch)} valid (truncated from {len(result_array)})")
+            else:
+                print(
+                    f"  ✗ Batch {batch_idx} (start={start_idx}): array too short ({len(result_array)} vs {len(batch)})")
+        else:
+            print(f"  ⚠ Batch {batch_idx} (start={start_idx}): not found in results")
+
+    save_cache(cache)
+    print(f"\n✅ Processed {len(valid_words)} valid words from {len(results_by_start_index)} batches")
+    return valid_words
+
+
+# ----------------------------------------------------------------------
+# PHASE 5: CLUSTERING AND BINNING - NO API CALLS
+# ============================================================================
+# Creates simple alphabetical bins
+# ============================================================================
+def cluster_and_bin(valid_words: List[str], freq: Counter, args):
+    """Create simple alphabetical bins."""
+    print("\n" + "=" * 60)
+    print("PHASE 5: Creating bins")
+    print("=" * 60)
+
+    if not valid_words:
+        print("❌ ERROR: No valid words to bin!")
+        return []
+
+    # Build vocabulary - take top N valid words by frequency
+    valid_freq = Counter({w: freq[w] for w in valid_words})
+    vocab = [w for w, c in valid_freq.most_common(min(args.max_vocab, len(valid_words)))]
+    print(f"Vocabulary size: {len(vocab):,}")
+
+    # Alphabetical binning
+    print("\nCreating alphabetical bins...")
+    sorted_vocab = sorted(vocab)
+    all_bins = []
+
+    for i in range(0, len(sorted_vocab), args.bin_size):
+        chunk = sorted_vocab[i:i + args.bin_size]
+        if len(chunk) >= 4:
+            all_bins.append(chunk)
+
+    print(f"Created {len(all_bins)} bins of size ~{args.bin_size}")
+
+    # Calculate coverage
+    binned_words = set([word for bin in all_bins for word in bin])
+    coverage = len(binned_words) / len(vocab) * 100 if vocab else 0
+
+    print(f"\n{'=' * 60}")
+    print(f"FINAL: {len(binned_words):,}/{len(vocab):,} words in bins ({coverage:.1f}%)")
+    print(f"Total bins: {len(all_bins):,}")
+
+    # Save
+    os.makedirs(args.out, exist_ok=True)
+    output_file = os.path.join(args.out, f"bins_k{args.bin_size}.json")
+    with open(output_file, "w") as f:
         json.dump({
-            'metadata': {
-                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-                'total_bins': len(bins),
-                'total_words': sum(len(b) for b in bins),
-                'unique_words': len(set(word for b in bins for word in b)),
-                'processing_time': time.time() - start_time,
-                'purpose': 'byte_level_steganography'
-            },
-            'bins': bins
+            "k": args.bin_size,
+            "vocab_size": len(vocab),
+            "bins": all_bins
         }, f, indent=2)
+    print(f"\n✓ Saved to {output_file}")
 
-    # Save simplified version for encoder
-    simplified_path = f"{output_dir}/byte_level_bins.json"
-    with open(simplified_path, 'w') as f:
-        json.dump({'bins': bins}, f, indent=2)
+    return all_bins
 
-    print(f"\n✅ BYTE-LEVEL BINS CREATED")
-    print(f"   Total bins: {len(bins)}")
-    print(f"   Time: {time.time() - start_time:.1f}s")
-    print(f"   Files saved:")
-    print(f"     {output_path} (comprehensive)")
-    print(f"     {simplified_path} (simplified for encoder)")
+
+# ----------------------------------------------------------------------
+# MAIN - PHASE-BASED EXECUTION
+# ----------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", default="data/corpus.json")
+    parser.add_argument("--out", default="token_binning_data")
+    parser.add_argument("--max-vocab", type=int, default=35000)
+    parser.add_argument("--bin-size", type=int, default=16)
+    parser.add_argument("--min-freq", type=int, default=5)
+
+    parser.add_argument("--phase",
+                        choices=["scan", "submit", "wait", "status", "retrieve", "cluster", "full"],
+                        default="full")
+    parser.add_argument("--batch-id", type=str, help="Batch ID for status/retrieve/wait")
+    parser.add_argument("--no-cluster", action="store_true", help="Skip clustering phase")
+
+    args = parser.parse_args()
+
+    BATCH_SIZE = 40  # 🔥 40 WORDS PER BATCH - RELIABLE
+
+    if args.phase == "scan":
+        scan_corpus(args.data, args.min_freq)
+        print("\nNext: python3 corpus_parser.py --phase submit")
+
+    elif args.phase == "submit":
+        if not os.path.exists("candidates.json"):
+            print("ERROR: No candidates.json found. Run --phase scan first.")
+            return
+
+        with open("candidates.json", "r") as f:
+            candidates = json.load(f)
+
+        batch_file, indices = create_validation_batch(candidates, batch_size=BATCH_SIZE)
+        if batch_file:
+            batch_id = submit_batch_with_retry(batch_file)
+            print(f"\nBATCH ID: {batch_id}")
+
+    elif args.phase == "wait":
+        if not args.batch_id:
+            print("ERROR: --batch-id required")
+            return
+        wait_for_batch_completion(args.batch_id)
+
+    elif args.phase == "status":
+        if not args.batch_id:
+            print("ERROR: --batch-id required")
+            return
+        try:
+            batch_job = client.batches.retrieve(args.batch_id)
+            print("\n" + "=" * 60)
+            print("BATCH STATUS")
+            print("=" * 60)
+            print(f"Batch ID: {batch_job.id}")
+            print(f"Status: {batch_job.status.upper()}")
+            print(f"Created: {time.ctime(batch_job.created_at)}")
+            if batch_job.completed_at:
+                print(f"Completed: {time.ctime(batch_job.completed_at)}")
+            print(f"\nRequests: {batch_job.request_counts.total}")
+            print(f"Completed: {batch_job.request_counts.completed}")
+            print(f"Failed: {batch_job.request_counts.failed}")
+            if batch_job.status == "completed":
+                print(f"\n✅ Ready to retrieve! Output file: {batch_job.output_file_id}")
+                print(f"Next: python3 corpus_parser.py --phase retrieve --batch-id {batch_job.id}")
+        except Exception as e:
+            print(f"ERROR: {e}")
+
+    elif args.phase == "retrieve":
+        if not args.batch_id:
+            print("ERROR: --batch-id required")
+            return
+        if not os.path.exists("candidates.json"):
+            print("ERROR: No candidates.json found")
+            return
+
+        with open("candidates.json", "r") as f:
+            candidates = json.load(f)
+
+        valid_words = retrieve_results_with_retry(args.batch_id, candidates, batch_size=BATCH_SIZE)
+
+        if valid_words:
+            with open("valid_words.json", "w") as f:
+                json.dump(valid_words, f)
+            print(f"\n✓ Saved {len(valid_words)} valid words to valid_words.json")
+
+    elif args.phase == "cluster":
+        if not os.path.exists("valid_words.json"):
+            print("ERROR: No valid_words.json found. Run --phase retrieve first.")
+            return
+        if not os.path.exists("candidates.json"):
+            print("ERROR: No candidates.json found")
+            return
+
+        with open("valid_words.json", "r") as f:
+            valid_words = json.load(f)
+        with open("candidates.json", "r") as f:
+            candidates = json.load(f)
+
+        freq = Counter({w: i for i, w in enumerate(candidates)})
+        cluster_and_bin(valid_words, freq, args)
+
+    elif args.phase == "full":
+        print("\n" + "=" * 60)
+        print("FULL PIPELINE - BATCH API ONLY")
+        print("=" * 60)
+        print("NO FALLBACKS. NO GIVING UP. The LLM decides.")
+        print("=" * 60)
+
+        # Scan ALL words
+        freq, candidates = scan_corpus(args.data, args.min_freq)
+
+        # Check cache with consistent batch size
+        cache = load_cache()
+        all_cached = True
+        for i in range(0, len(candidates), BATCH_SIZE):
+            batch = candidates[i:i + BATCH_SIZE]
+            cache_key = hashlib.md5(','.join(sorted(batch)).encode()).hexdigest()
+            if cache_key not in cache:
+                all_cached = False
+                break
+
+        if all_cached:
+            print("\n✓ All batches already cached! Skipping batch submission.")
+            valid_words = []
+            for i in range(0, len(candidates), BATCH_SIZE):
+                batch = candidates[i:i + BATCH_SIZE]
+                cache_key = hashlib.md5(','.join(sorted(batch)).encode()).hexdigest()
+                bools = cache[cache_key]
+                batch_valid = [batch[j] for j, v in enumerate(bools) if v]
+                valid_words.extend(batch_valid)
+
+            with open("valid_words.json", "w") as f:
+                json.dump(valid_words, f)
+            print(f"✓ Reconstructed {len(valid_words)} valid words from cache")
+
+        else:
+            batch_file, indices = create_validation_batch(candidates, batch_size=BATCH_SIZE)
+            if batch_file:
+                batch_id = submit_batch_with_retry(batch_file)
+                print(f"\nBATCH ID: {batch_id}")
+                print("\n✅ Batch submitted. Run these commands when complete:")
+                print(f"  python3 corpus_parser.py --phase status --batch-id {batch_id}")
+                print(f"  python3 corpus_parser.py --phase retrieve --batch-id {batch_id}")
+                print(f"  python3 corpus_parser.py --phase cluster")
+                return
+
+        if not args.no_cluster and os.path.exists("valid_words.json"):
+            with open("valid_words.json", "r") as f:
+                valid_words = json.load(f)
+            cluster_and_bin(valid_words, freq, args)
 
 
 if __name__ == "__main__":
