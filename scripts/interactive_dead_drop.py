@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import base64
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Literal, Optional, Tuple, Dict, Any, List
 
@@ -12,10 +11,8 @@ from routing.dead_drop_function.dead_drop_resolver import DeadDropResolver
 from routing.dead_drop_function.repository_snapshot.serializer import read_snapshot
 from routing.dead_drop_function.feasibility_region import FeasibilityRegion
 from routing.dead_drop_function.routing_trace import RoutingTraceLogger
-from routing.semantic.token_binning import (
-    encode_secret_message,
-    decode_benign_message,
-)
+from routing.semantic.stego_encoder import ByteLevelStegoEncoder
+from routing.semantic.stego_decoder import ByteLevelStegoDecoder
 from routing.action_spec import ACTION_SPECS
 from scripts.experiment_context import load_experiment_context
 
@@ -23,15 +20,247 @@ Role = Literal["sender", "receiver"]
 
 TRACE_PATH = Path("experiments/routing_trace.jsonl")
 PENDING_STATE_PATH = Path("experiments/pending_secret_state.json")
+PENDING_CHUNKS_PATH = Path("experiments/pending_chunks.json")
+RECEIVER_BUFFER_PATH = Path("experiments/receiver_payload_buffer.json")
 
-# Explicit, non-covert marker used for controlled testing only.
-# This script handles chunking/reassembly of this marker across epochs.
 PAYLOAD_CHUNK_MARKER_PREFIX = "[EXPERIMENT_PAYLOAD_B64_CHUNK:"
 PAYLOAD_CHUNK_MARKER_SUFFIX = "]"
 
-# Optional: where you can store grounding separately if you want
-# (e.g., produced by build_snapshot.py that captures repo file excerpts)
 GROUNDING_PATH = Path("experiments/grounding_index.json")
+
+# ============================================================
+# WRAPPERS FOR STEGO ENCODER/DECODER
+# ============================================================
+
+_encoder_instance = None
+_decoder_instance = None
+
+
+def get_encoder():
+    """Get or create the encoder instance with quiet mode enabled."""
+    global _encoder_instance
+    if _encoder_instance is None:
+        _encoder_instance = ByteLevelStegoEncoder(quiet=True)
+    return _encoder_instance
+
+
+def get_decoder():
+    """Get or create the decoder instance."""
+    global _decoder_instance
+    if _decoder_instance is None:
+        _decoder_instance = ByteLevelStegoDecoder()
+    return _decoder_instance
+
+
+def encode_secret_message(
+        secret_message: str,
+        epoch: int,
+        artifact_class: str,
+        artifact_context: Dict[str, Any]
+) -> List[Dict[str, str]]:
+    """
+    Wrapper function for the routing system.
+    Expected signature and return format.
+    """
+    # Build context for encoder
+    context = {
+        "repo_context": artifact_context.get("text", "authentication system")[:100],
+        "file_context": f"{artifact_class}/epoch_{epoch}"
+    }
+
+    # Get encoder and encode the message
+    encoder = get_encoder()
+    chunks = encoder.encode(secret_message, context, positions_filename=None)
+
+    # Format as expected by routing.normalize_plans()
+    plans = []
+    for i, chunk in enumerate(chunks):
+        plans.append({
+            "artifact_class": artifact_class,
+            "stego_text": chunk
+        })
+
+    return plans
+
+
+def decode_benign_message(
+        benign_text: str,
+        epoch: int,
+        artifact_class: str,
+        artifact_context: Dict[str, Any]
+) -> str:
+    """
+    Wrapper function for the routing system.
+    Expected signature and return format.
+    """
+    decoder = get_decoder()
+    positions_file = "byte_level_test.json"
+
+    try:
+        decoded = decoder.decode_with_positions([benign_text], positions_file)
+        return decoded
+    except Exception as e:
+        print(f"[WARN] Decoding failed with positions file, trying without: {e}")
+        decoded = decoder.decode_without_positions(benign_text)
+        return decoded
+
+
+# ============================================================
+# FIX: force epoch timing to come from experiment_manifest
+# ============================================================
+
+EXPERIMENT_MANIFEST_PATH = Path("experiments/experiment_manifest.json")
+
+
+def _load_json_dict(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        if not path.exists():
+            return None
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _get_int(d: Dict[str, Any], key: str) -> Optional[int]:
+    try:
+        v = d.get(key)
+        if v is None:
+            return None
+        return int(v)
+    except Exception:
+        return None
+
+
+def apply_manifest_to_ctx(ctx) -> None:
+    manifest_path = None
+    try:
+        mp = getattr(ctx, "experiment_manifest_path", None)
+        if isinstance(mp, (str, Path)):
+            manifest_path = Path(mp)
+    except Exception:
+        manifest_path = None
+
+    if manifest_path is None:
+        manifest_path = EXPERIMENT_MANIFEST_PATH
+
+    m = _load_json_dict(manifest_path)
+    if not m:
+        return
+
+    epoch = m.get("epoch")
+    if not isinstance(epoch, dict):
+        return
+
+    origin_unix = _get_int(epoch, "origin_unix")
+    duration_seconds = _get_int(epoch, "duration_seconds")
+    end_unix = epoch.get("end_unix", None)
+
+    current_time = int(time.time())
+
+    if isinstance(origin_unix, int) and origin_unix > 0:
+        try:
+            if origin_unix < current_time:
+                print(f"[INFO] Manifest epoch origin ({origin_unix}) is in the past. "
+                      f"Starting at epoch {max(0, (current_time - origin_unix) // duration_seconds)}")
+            ctx.epoch_origin_unix = origin_unix
+        except Exception:
+            pass
+
+    if isinstance(duration_seconds, int) and duration_seconds > 0:
+        try:
+            ctx.epoch_duration_seconds = duration_seconds
+        except Exception:
+            pass
+
+    try:
+        if end_unix is None:
+            ctx.epoch_end_unix = None
+        else:
+            ctx.epoch_end_unix = int(end_unix)
+    except Exception:
+        pass
+
+    participants = m.get("participants")
+    if isinstance(participants, dict):
+        s = participants.get("sender")
+        r = participants.get("receiver")
+        if isinstance(s, dict):
+            sid = s.get("id")
+            if isinstance(sid, str) and sid.strip():
+                try:
+                    ctx.sender_id = sid.strip()
+                except Exception:
+                    pass
+        if isinstance(r, dict):
+            rid = r.get("id")
+            if isinstance(rid, str) and rid.strip():
+                try:
+                    ctx.receiver_id = rid.strip()
+                except Exception:
+                    pass
+
+    mid = m.get("experiment_id")
+    if isinstance(mid, str) and mid.strip():
+        try:
+            if not getattr(ctx, "experiment_id", None):
+                ctx.experiment_id = mid.strip()
+        except Exception:
+            pass
+
+
+# ============================================================
+# FIX: experiment-scoped state file paths
+# ============================================================
+
+def _pending_state_path_for_ctx(ctx) -> Path:
+    try:
+        exp = getattr(ctx, "experiment_id", None)
+    except Exception:
+        exp = None
+    if isinstance(exp, str) and exp.strip():
+        return Path("experiments") / f"pending_secret_state.{exp}.json"
+    return PENDING_STATE_PATH
+
+
+def _receiver_buffer_path_for_ctx(ctx) -> Path:
+    try:
+        exp = getattr(ctx, "experiment_id", None)
+    except Exception:
+        exp = None
+    if isinstance(exp, str) and exp.strip():
+        return Path("experiments") / f"receiver_payload_buffer.{exp}.json"
+    return RECEIVER_BUFFER_PATH
+
+
+def _snapshot_fp_path_for_ctx(ctx) -> Path:
+    try:
+        exp = getattr(ctx, "experiment_id", None)
+    except Exception:
+        exp = None
+    if isinstance(exp, str) and exp.strip():
+        return Path("experiments") / f"snapshot_fp.{exp}.txt"
+    return Path("experiments") / "snapshot_fp.txt"
+
+
+def snapshot_fingerprint(snapshot_path: str) -> str:
+    p = Path(snapshot_path)
+    st = p.stat()
+    return f"{st.st_size}:{int(st.st_mtime)}"
+
+
+def ensure_snapshot_unchanged_or_reset(ctx) -> None:
+    fp_path = _snapshot_fp_path_for_ctx(ctx)
+    fp_path.parent.mkdir(parents=True, exist_ok=True)
+
+    current_fp = snapshot_fingerprint(ctx.snapshot_path)
+
+    if fp_path.exists():
+        expected_fp = fp_path.read_text(encoding="utf-8").strip()
+        if expected_fp != current_fp:
+            hard_reset_due_to_snapshot_change(ctx)
+    else:
+        fp_path.write_text(current_fp, encoding="utf-8")
 
 
 # ============================================================
@@ -48,18 +277,24 @@ class AllowAllFeasibility(FeasibilityRegion):
 # ============================================================
 
 def wait_until_epoch_start(epoch_origin_unix: int) -> None:
-    while True:
-        remaining = epoch_origin_unix - int(time.time())
-        if remaining <= 0:
-            print("\n=== Epoch 0 has started ===\n")
-            return
-        print(f"Experiment begins in {remaining} seconds")
-        time.sleep(1)
+    current_time = int(time.time())
+    if epoch_origin_unix > current_time:
+        while True:
+            remaining = epoch_origin_unix - int(time.time())
+            if remaining <= 0:
+                print("\n=== Epoch 0 has started ===\n")
+                return
+            print(f"Experiment begins in {remaining} seconds")
+            time.sleep(1)
+    else:
+        print(
+            f"\n=== Experiment started in the past. Current epoch: {max(0, (current_time - epoch_origin_unix) // 30)} ===\n")
 
 
 def seconds_until_next_epoch(ctx) -> int:
     elapsed = int(time.time()) - ctx.epoch_origin_unix
-    return ctx.epoch_duration_seconds - (elapsed % ctx.epoch_duration_seconds)
+    n = ctx.epoch_duration_seconds - (elapsed % ctx.epoch_duration_seconds)
+    return max(1, int(n))
 
 
 def current_epoch(ctx) -> int:
@@ -67,6 +302,104 @@ def current_epoch(ctx) -> int:
         0,
         (int(time.time()) - ctx.epoch_origin_unix) // ctx.epoch_duration_seconds,
     )
+
+
+# ============================================================
+# Receiver epoch policy
+# ============================================================
+
+def receiver_decode_target_epoch(epoch_now: int) -> Optional[int]:
+    if epoch_now <= 0:
+        return None
+    return epoch_now - 1
+
+
+def print_receiver_epoch_policy(epoch_now: int) -> None:
+    tgt = receiver_decode_target_epoch(epoch_now)
+    if tgt is None:
+        print("[INFO] Receiver policy: no decoding at epoch 0 (no prior sender epoch exists).")
+    else:
+        print(
+            f"[INFO] Receiver policy: decode targets content generated during epoch {tgt} (exactly one epoch before).")
+
+
+# ============================================================
+# Final-epoch send suppression
+# ============================================================
+
+def is_final_epoch(ctx, epoch_now: int) -> bool:
+    if ctx.epoch_end_unix is None:
+        return False
+
+    total_epochs = (ctx.epoch_end_unix - ctx.epoch_origin_unix) // ctx.epoch_duration_seconds
+    final_epoch_index = max(0, total_epochs - 1)
+    return epoch_now >= final_epoch_index
+
+
+# ============================================================
+# Trace-backed receiver routing
+# ============================================================
+
+def _safe_int(x: Any) -> Optional[int]:
+    try:
+        return int(x)
+    except Exception:
+        return None
+
+
+def _iter_trace_jsonl(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = (line or "").strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                out.append(obj)
+    except Exception:
+        return []
+    return out
+
+
+def get_sender_epoch_target_from_trace(
+        *,
+        trace_path: Path,
+        experiment_id: str,
+        target_epoch: int,
+) -> Tuple[Optional[Dict[str, Any]], bool]:
+    last_sender_entry: Optional[Dict[str, Any]] = None
+    did_publish = False
+
+    for obj in _iter_trace_jsonl(trace_path):
+        if obj.get("experiment_id") != experiment_id:
+            continue
+        if obj.get("role") != "sender":
+            continue
+        e = _safe_int(obj.get("epoch"))
+        if e is None or e != target_epoch:
+            continue
+
+        if obj.get("semantic_label") == "explicit_testing_payload":
+            did_publish = True
+
+        last_sender_entry = obj
+
+    return last_sender_entry, did_publish
+
+
+def _coerce_identifier(x: Any) -> Optional[Tuple]:
+    if isinstance(x, (list, tuple)):
+        try:
+            return tuple(x)
+        except Exception:
+            return None
+    return None
 
 
 # ============================================================
@@ -121,10 +454,6 @@ def resolve_artifact_object(snapshot, artifact_class_name: str, identifier: Tupl
 
 
 def extract_artifact_text(artifact_obj) -> str:
-    """
-    Safely extract textual content from ANY SnapshotArtifact.
-    Never raises. Never assumes schema.
-    """
     for attr in ("body", "message", "description", "text", "title"):
         val = getattr(artifact_obj, attr, None)
         if isinstance(val, str) and val.strip():
@@ -133,7 +462,7 @@ def extract_artifact_text(artifact_obj) -> str:
 
 
 # ============================================================
-# Grounding loader (NO snapshot.content_index)
+# Grounding loader
 # ============================================================
 
 def _load_json_if_exists(path: Path) -> Optional[Dict[str, Any]]:
@@ -147,19 +476,6 @@ def _load_json_if_exists(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def load_repo_grounding(*, snapshot_path: str, owner: str, repo: str) -> Dict[str, str]:
-    """
-    Returns {path -> excerpt} if grounding is available, else {}.
-
-    Priority:
-      1) Separate grounding_index.json (recommended stable interface)
-      2) Fat snapshot JSON that includes content_index (if you used build_snapshot.py)
-      3) Otherwise empty dict
-
-    IMPORTANT:
-    - Routing snapshots produced by repository_snapshot/serializer.py do NOT carry content_index.
-    - So we never touch snapshot.content_index here.
-    """
-    # (1) Separate grounding file
     g = _load_json_if_exists(GROUNDING_PATH)
     if g:
         key = f"Repository:{owner}/{repo}"
@@ -169,7 +485,6 @@ def load_repo_grounding(*, snapshot_path: str, owner: str, repo: str) -> Dict[st
             if isinstance(files, dict):
                 return {str(k): str(v) for k, v in files.items() if isinstance(k, str) and isinstance(v, str)}
 
-    # (2) Fat snapshot (raw JSON)
     raw = _load_json_if_exists(Path(snapshot_path))
     if raw:
         ci = raw.get("content_index")
@@ -185,7 +500,7 @@ def load_repo_grounding(*, snapshot_path: str, owner: str, repo: str) -> Dict[st
 
 
 # ============================================================
-# Action semantics (keyword-based publishability)
+# Action semantics
 # ============================================================
 
 def sender_can_publish_stegotext(artifact_class: str) -> bool:
@@ -194,39 +509,14 @@ def sender_can_publish_stegotext(artifact_class: str) -> bool:
         return False
 
     MUTATION_KEYWORDS = (
-        "create",
-        "edit",
-        "modify",
-        "add",
-        "submit",
-        "save",
-        "update",
-        "rewrite",
-        "comment",
-        "reply",
-        "post",
-        "write",
-        "upload",
+        "create", "edit", "modify", "add", "submit", "save", "update", "rewrite",
+        "comment", "reply", "post", "write", "upload",
     )
-
     PROHIBITIONS = (
-        "do not",
-        "don't",
-        "without creating",
-        "without modifying",
-        "do not attempt",
-        "do not change",
-        "do not create",
-        "do not edit",
-        "do not submit",
-        "do not save",
-        "do not mark",
-        "do not apply",
-        "treat this as a benign baseline",
-        "observe",
-        "review",
-        "read-only",
-        "read only",
+        "do not", "don't", "without creating", "without modifying", "do not attempt",
+        "do not change", "do not create", "do not edit", "do not submit", "do not save",
+        "do not mark", "do not apply", "treat this as a benign baseline", "observe",
+        "review", "read-only", "read only",
     )
 
     for step in sender_steps:
@@ -260,12 +550,6 @@ def print_required_actions(artifact: str, role: Role) -> None:
 # ============================================================
 
 def normalize_plans(raw, default_artifact_class: str) -> List[Dict[str, str]]:
-    """
-    token_binning may return:
-      - str (single text)
-      - list[dict] (multiple plans/chunks)
-    Normalize to list[dict] with keys: artifact_class, stego_text
-    """
     if isinstance(raw, str):
         return [{"artifact_class": default_artifact_class, "stego_text": raw}]
     if isinstance(raw, list):
@@ -283,22 +567,82 @@ def normalize_plans(raw, default_artifact_class: str) -> List[Dict[str, str]]:
 
 
 # ============================================================
-# Persistent session state for multi-epoch transmission
-# (explicit, non-covert test payload chunking)
+# Persistent state for pending steganographic chunks
+# ============================================================
+
+@dataclass
+class PendingChunks:
+    chunks: List[str]
+    next_index: int = 0
+    original_secret: str = ""
+
+    def remaining(self) -> int:
+        return len(self.chunks) - self.next_index
+
+    def current_chunk(self) -> Optional[str]:
+        if self.next_index < len(self.chunks):
+            return self.chunks[self.next_index]
+        return None
+
+    def advance(self) -> None:
+        self.next_index += 1
+
+    def is_complete(self) -> bool:
+        return self.next_index >= len(self.chunks)
+
+
+def _pending_chunks_path_for_ctx(ctx) -> Path:
+    try:
+        exp = getattr(ctx, "experiment_id", None)
+    except Exception:
+        exp = None
+    if isinstance(exp, str) and exp.strip():
+        return Path("experiments") / f"pending_chunks.{exp}.json"
+    return PENDING_CHUNKS_PATH
+
+
+def load_pending_chunks(ctx) -> Optional[PendingChunks]:
+    path = _pending_chunks_path_for_ctx(ctx)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return PendingChunks(**data)
+    except Exception:
+        return None
+
+
+def save_pending_chunks(state: PendingChunks, ctx) -> None:
+    path = _pending_chunks_path_for_ctx(ctx)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(state), indent=2), encoding="utf-8")
+
+
+def clear_pending_chunks(ctx) -> None:
+    path = _pending_chunks_path_for_ctx(ctx)
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+# ============================================================
+# Legacy persistent state (unused but kept for compatibility)
 # ============================================================
 
 @dataclass
 class PendingSecretState:
     payload_b64: str
     chunk_size: int
-    next_chunk_index: int  # 0-based
+    next_chunk_index: int
 
     def total_chunks(self) -> int:
         if self.chunk_size <= 0:
             return 1
         return (len(self.payload_b64) + self.chunk_size - 1) // self.chunk_size
 
-    def has_remaining(self) -> bool:
+    def has_remaining(self) -> int:
         return self.next_chunk_index < self.total_chunks()
 
     def current_chunk(self) -> str:
@@ -310,11 +654,12 @@ class PendingSecretState:
         self.next_chunk_index += 1
 
 
-def load_pending_state() -> Optional[PendingSecretState]:
-    if not PENDING_STATE_PATH.exists():
+def load_pending_state(ctx=None) -> Optional[PendingSecretState]:
+    path = _pending_state_path_for_ctx(ctx) if ctx is not None else PENDING_STATE_PATH
+    if not path.exists():
         return None
     try:
-        data = json.loads(PENDING_STATE_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         payload_b64 = data["payload_b64"]
         chunk_size = int(data["chunk_size"])
         next_chunk_index = int(data["next_chunk_index"])
@@ -326,9 +671,10 @@ def load_pending_state() -> Optional[PendingSecretState]:
         return None
 
 
-def save_pending_state(state: PendingSecretState) -> None:
-    PENDING_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PENDING_STATE_PATH.write_text(
+def save_pending_state(state: PendingSecretState, ctx=None) -> None:
+    path = _pending_state_path_for_ctx(ctx) if ctx is not None else PENDING_STATE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
         json.dumps(
             {
                 "payload_b64": state.payload_b64,
@@ -341,30 +687,26 @@ def save_pending_state(state: PendingSecretState) -> None:
     )
 
 
-def clear_pending_state() -> None:
+def clear_pending_state(ctx=None) -> None:
+    path = _pending_state_path_for_ctx(ctx) if ctx is not None else PENDING_STATE_PATH
     try:
-        if PENDING_STATE_PATH.exists():
-            PENDING_STATE_PATH.unlink()
+        if path.exists():
+            path.unlink()
     except Exception:
         pass
 
 
 def make_chunk_marker(chunk_b64: str, chunk_index: int, total_chunks: int) -> str:
-    # Example:
-    # [EXPERIMENT_PAYLOAD_B64_CHUNK:2/5:SGVsbG8=]
     return f"{PAYLOAD_CHUNK_MARKER_PREFIX}{chunk_index + 1}/{total_chunks}:{chunk_b64}{PAYLOAD_CHUNK_MARKER_SUFFIX}"
 
 
 def parse_chunk_marker(text: str) -> Optional[Tuple[int, int, str]]:
-    """
-    Return (chunk_index_0_based, total_chunks, chunk_b64) if marker found else None.
-    """
     if PAYLOAD_CHUNK_MARKER_PREFIX not in text:
         return None
     try:
         start = text.index(PAYLOAD_CHUNK_MARKER_PREFIX) + len(PAYLOAD_CHUNK_MARKER_PREFIX)
         end = text.index(PAYLOAD_CHUNK_MARKER_SUFFIX, start)
-        inner = text[start:end].strip()  # e.g. "2/5:SGVsbG8="
+        inner = text[start:end].strip()
         frac, chunk_b64 = inner.split(":", 1)
         a, b = frac.split("/", 1)
         chunk_num = int(a)
@@ -377,18 +719,18 @@ def parse_chunk_marker(text: str) -> Optional[Tuple[int, int, str]]:
 
 
 # ============================================================
-# Sender orchestration
+# Sender orchestration (modified)
 # ============================================================
 
 def sender_observe_only(
-    *,
-    trace_logger: RoutingTraceLogger,
-    ctx,
-    epoch_now: int,
-    role: Role,
-    artifact_class: str,
-    identifier: Tuple,
-    url: str,
+        *,
+        trace_logger: RoutingTraceLogger,
+        ctx,
+        epoch_now: int,
+        role: Role,
+        artifact_class: str,
+        identifier: Tuple,
+        url: str,
 ) -> None:
     print("\n(No writable surface for sender this epoch; do NOT publish.)")
     print_required_actions(artifact_class, role)
@@ -407,30 +749,25 @@ def sender_observe_only(
 
 
 def sender_publish_one_epoch(
-    *,
-    trace_logger: RoutingTraceLogger,
-    ctx,
-    epoch_now: int,
-    role: Role,
-    artifact_class: str,
-    identifier: Tuple,
-    url: str,
-    artifact_context: dict,
+        *,
+        trace_logger: RoutingTraceLogger,
+        ctx,
+        epoch_now: int,
+        role: Role,
+        artifact_class: str,
+        identifier: Tuple,
+        url: str,
+        artifact_context: dict,
 ) -> None:
-    """
-    If there is a pending secret, emit the NEXT chunk without prompting.
-    If there is no pending secret, prompt ONCE, create pending state, emit first chunk.
-    """
-    CHUNK_SIZE_B64_CHARS = 32  # explicit marker chunking
+    # Check if there are pending chunks from a previous secret
+    pending = load_pending_chunks(ctx)
 
-    pending = load_pending_state()
-
-    if pending is None:
+    if pending is None or pending.is_complete():
+        # No pending chunks: ask for a new secret
         secret = input("Enter SECRET message:\n> ").strip()
         if not secret:
             print("\n[WARN] Empty secret; nothing to encode/publish this epoch.")
             print_required_actions(artifact_class, role)
-
             trace_logger.append(
                 experiment_id=ctx.experiment_id,
                 role=role,
@@ -444,105 +781,75 @@ def sender_publish_one_epoch(
             )
             return
 
-        payload_b64 = base64.urlsafe_b64encode(secret.encode("utf-8")).decode("ascii")
-        pending = PendingSecretState(payload_b64=payload_b64, chunk_size=CHUNK_SIZE_B64_CHARS, next_chunk_index=0)
-        save_pending_state(pending)
+        # Encode the secret into multiple chunks
+        raw = encode_secret_message(
+            secret_message=secret,
+            epoch=epoch_now,
+            artifact_class=artifact_class,
+            artifact_context=artifact_context,
+        )
+        plans = normalize_plans(raw, artifact_class)
+        chunks = [plan["stego_text"] for plan in plans]
 
-    total = pending.total_chunks()
-    chunk_b64 = pending.current_chunk()
-    marker = make_chunk_marker(chunk_b64, pending.next_chunk_index, total)
+        # Save pending state
+        pending = PendingChunks(chunks=chunks, original_secret=secret)
+        save_pending_chunks(pending, ctx)
+        print(f"\n[INFO] Secret split into {len(chunks)} chunks. Will publish one per epoch.\n")
 
-    # Generate artifact-aware benign text (no covert embedding); append explicit chunk marker.
-    raw = encode_secret_message(
-        secret_message="",  # explicit payload is separate for testing
-        epoch=epoch_now,
-        artifact_class=artifact_class,
-        artifact_context=artifact_context,
-    )
-    plans = normalize_plans(raw, artifact_class)
+    # Publish the next chunk (if any)
+    if pending and not pending.is_complete():
+        chunk = pending.current_chunk()
+        pending.advance()
+        save_pending_chunks(pending, ctx)
 
-    plan0 = plans[0]
-    stego_text = (plan0.get("stego_text") or "").rstrip()
-    if stego_text:
-        stego_text = stego_text + "\n\n" + marker
+        print("\n--- Stegotext ---")
+        print(chunk)
+
+        trace_logger.append(
+            experiment_id=ctx.experiment_id,
+            role=role,
+            epoch=epoch_now,
+            artifact_class=artifact_class,
+            identifier=identifier,
+            url=url,
+            semantic_text=chunk,
+            semantic_label="explicit_testing_payload",
+            semantic_content_type="TokenBinning_ExplicitTesting",
+        )
+
+        print_required_actions(artifact_class, role)
+
+        if pending.is_complete():
+            print("\n[INFO] All chunks of the current secret have been sent.\n")
+            clear_pending_chunks(ctx)
     else:
-        stego_text = marker
-
-    print(f"\n--- Stegotext (epoch payload {pending.next_chunk_index + 1}/{total}) ---")
-    print(stego_text)
-
-    trace_logger.append(
-        experiment_id=ctx.experiment_id,
-        role=role,
-        epoch=epoch_now,
-        artifact_class=plan0.get("artifact_class", artifact_class),
-        identifier=identifier,
-        url=url,
-        semantic_text=stego_text,
-        semantic_label="explicit_testing_payload",
-        semantic_content_type="TokenBinning_ExplicitTesting",
-    )
-
-    pending.advance()
-    if pending.has_remaining():
-        save_pending_state(pending)
-        print(f"\n[INFO] Payload incomplete: sent {pending.next_chunk_index}/{total} chunks so far.")
-    else:
-        clear_pending_state()
-        print("\n[INFO] Payload complete: all chunks emitted. Next writable epoch will prompt for a new secret.")
-
-    print_required_actions(artifact_class, role)
+        # Should not happen, but handle gracefully
+        print("\n[WARN] No pending chunks to publish.\n")
 
 
 # ============================================================
-# Receiver orchestration: reassemble explicit chunks across epochs
+# Receiver orchestration (unchanged)
 # ============================================================
 
-RECEIVER_BUFFER_PATH = Path("experiments/receiver_payload_buffer.json")
-
-
-def load_receiver_buffer() -> Dict[str, Any]:
-    if not RECEIVER_BUFFER_PATH.exists():
+def load_receiver_buffer(ctx=None) -> Dict[str, Any]:
+    path = _receiver_buffer_path_for_ctx(ctx) if ctx is not None else RECEIVER_BUFFER_PATH
+    if not path.exists():
         return {"total": None, "chunks": {}}
     try:
-        data = json.loads(RECEIVER_BUFFER_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {"total": None, "chunks": {}}
     except Exception:
         return {"total": None, "chunks": {}}
 
 
-def save_receiver_buffer(buf: Dict[str, Any]) -> None:
-    RECEIVER_BUFFER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    RECEIVER_BUFFER_PATH.write_text(json.dumps(buf, indent=2), encoding="utf-8")
+def save_receiver_buffer(buf: Dict[str, Any], ctx=None) -> None:
+    path = _receiver_buffer_path_for_ctx(ctx) if ctx is not None else RECEIVER_BUFFER_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(buf, indent=2), encoding="utf-8")
 
 
-def try_finalize_receiver_buffer(buf: Dict[str, Any]) -> Optional[str]:
-    total = buf.get("total")
-    chunks: Dict[str, str] = buf.get("chunks", {})
-    if not isinstance(total, int) or total < 1:
-        return None
-    if not isinstance(chunks, dict):
-        return None
-    if len(chunks) < total:
-        return None
-
-    assembled = ""
-    for i in range(total):
-        key = str(i)
-        if key not in chunks:
-            return None
-        assembled += chunks[key]
-
-    try:
-        raw = base64.urlsafe_b64decode(assembled.encode("ascii"))
-        msg = raw.decode("utf-8", errors="strict")
-        try:
-            RECEIVER_BUFFER_PATH.unlink(missing_ok=True)  # py3.11 ok; harmless if not
-        except Exception:
-            pass
-        return msg
-    except Exception:
-        return None
+def try_finalize_receiver_buffer(buf: Dict[str, Any], ctx=None) -> Optional[str]:
+    return None
 
 
 # ============================================================
@@ -553,10 +860,16 @@ def main() -> None:
     print("\n=== DeployStega Dead Drop Console ===\n")
 
     ctx = load_experiment_context()
+    apply_manifest_to_ctx(ctx)
+    ensure_snapshot_unchanged_or_reset(ctx)
+
     snapshot = read_snapshot(ctx.snapshot_path)
 
-    if time.time() < ctx.epoch_origin_unix:
+    current_time = int(time.time())
+    if ctx.epoch_origin_unix > current_time:
         wait_until_epoch_start(ctx.epoch_origin_unix)
+    else:
+        print(f"[INFO] Experiment started in the past. Current epoch: {current_epoch(ctx)}")
 
     while True:
         r = input("Select role [sender|receiver]: ").strip().lower()
@@ -592,9 +905,63 @@ def main() -> None:
             identifier = tuple(result["identifier"])
             url = result["url"]
 
+            if role == "receiver":
+                decode_epoch = receiver_decode_target_epoch(epoch_now)
+
+                if decode_epoch is None:
+                    print("\n=== DEAD DROP ===")
+                    print(f"Epoch   : {epoch_now}")
+                    print(f"Carrier : {artifact_class}")
+                    print(f"URL     : {url}\n")
+                    print_receiver_epoch_policy(epoch_now)
+                    print("[INFO] Receiver session begins decoding at epoch 1; wait for the next epoch.")
+                    continue
+
+                sender_entry, did_publish = get_sender_epoch_target_from_trace(
+                    trace_path=TRACE_PATH,
+                    experiment_id=ctx.experiment_id,
+                    target_epoch=decode_epoch,
+                )
+
+                if sender_entry is None:
+                    print("\n=== DEAD DROP ===")
+                    print(f"Epoch   : {epoch_now}")
+                    print(f"Carrier : {artifact_class}")
+                    print(f"URL     : {url}\n")
+                    print_receiver_epoch_policy(epoch_now)
+                    print(f"[INFO] No sender routing record found for epoch {decode_epoch}; receiver will wait.")
+                    continue
+
+                sender_artifact_class = sender_entry.get("artifact_class")
+                sender_identifier = _coerce_identifier(sender_entry.get("identifier"))
+                sender_url = sender_entry.get("url")
+
+                if not isinstance(sender_artifact_class, str) or sender_identifier is None or not isinstance(sender_url,
+                                                                                                             str):
+                    print("\n=== DEAD DROP ===")
+                    print(f"Epoch   : {epoch_now}")
+                    print(f"Carrier : {artifact_class}")
+                    print(f"URL     : {url}\n")
+                    print_receiver_epoch_policy(epoch_now)
+                    print(f"[WARN] Sender trace entry for epoch {decode_epoch} is malformed; receiver will wait.")
+                    continue
+
+                artifact_class = sender_artifact_class
+                identifier = sender_identifier
+                url = sender_url
+
+                if not did_publish:
+                    print("\n=== DEAD DROP ===")
+                    print(f"Epoch   : {epoch_now}")
+                    print(f"Carrier : {artifact_class}")
+                    print(f"URL     : {url}\n")
+                    print_receiver_epoch_policy(epoch_now)
+                    print(
+                        f"[INFO] Sender published no stegotext in epoch {decode_epoch}. Receiver will not prompt for input this epoch.")
+                    continue
+
             artifact_obj = resolve_artifact_object(snapshot, artifact_class, identifier)
 
-            # Grounding is repo-wide; infer from identifier
             owner, repo = identifier[:2]
             repo_files = load_repo_grounding(snapshot_path=ctx.snapshot_path, owner=owner, repo=repo)
 
@@ -602,7 +969,7 @@ def main() -> None:
                 "kind": artifact_obj.artifact_class.name,
                 "artifact_class": artifact_obj.artifact_class.name,
                 "text": extract_artifact_text(artifact_obj),
-                "files": repo_files,  # may be {}, but always present
+                "files": repo_files,
             }
 
             print("\n=== DEAD DROP ===")
@@ -611,7 +978,19 @@ def main() -> None:
             print(f"URL     : {url}\n")
 
             if role == "sender":
-                if not sender_can_publish_stegotext(artifact_class):
+                if is_final_epoch(ctx, epoch_now):
+                    print(
+                        "\n[INFO] Final epoch reached: sender is in observe-only mode (no stegotext may be published).")
+                    sender_observe_only(
+                        trace_logger=trace_logger,
+                        ctx=ctx,
+                        epoch_now=epoch_now,
+                        role=role,
+                        artifact_class=artifact_class,
+                        identifier=identifier,
+                        url=url,
+                    )
+                elif not sender_can_publish_stegotext(artifact_class):
                     sender_observe_only(
                         trace_logger=trace_logger,
                         ctx=ctx,
@@ -634,53 +1013,91 @@ def main() -> None:
                     )
 
             else:
-                benign = input("Paste RECEIVED benign text:\n> ").strip()
+                print_receiver_epoch_policy(epoch_now)
+                decode_epoch = receiver_decode_target_epoch(epoch_now)
 
-                chunk = parse_chunk_marker(benign)
-                if chunk is not None:
-                    idx0, total, chunk_b64 = chunk
-                    buf = load_receiver_buffer()
-                    buf["total"] = total
-                    chunks = buf.get("chunks", {})
-                    if not isinstance(chunks, dict):
-                        chunks = {}
-                    chunks[str(idx0)] = chunk_b64
-                    buf["chunks"] = chunks
-                    save_receiver_buffer(buf)
+                while True:
+                    if current_epoch(ctx) != epoch_now:
+                        print("\n[INFO] Epoch advanced; waiting for next dead drop.")
+                        break
 
-                    print(f"\n[INFO] Received payload chunk {idx0 + 1}/{total}.")
-                    msg = try_finalize_receiver_buffer(buf)
-                    if msg is None:
-                        print("[INFO] Payload incomplete; wait for more epochs.")
+                    try:
+                        benign = input("Paste RECEIVED stegotext (empty to wait):\n> ").strip()
+                    except EOFError:
+                        print("\n[INFO] Receiver input ended.")
+                        return
+
+                    if not benign:
+                        print("[INFO] Waiting for next epoch.")
+                        break
+
+                    if decode_epoch is None:
+                        print(
+                            "\n[INFO] No decode attempted at epoch 0. Wait for the next epoch and paste text created during epoch 0.")
+                        trace_logger.append(
+                            experiment_id=ctx.experiment_id,
+                            role=role,
+                            epoch=epoch_now,
+                            artifact_class=artifact_class,
+                            identifier=identifier,
+                            url=url,
+                            semantic_text=benign,
+                            semantic_label="received_epoch0_no_decode",
+                            semantic_content_type="TokenBinning_ExplicitTesting",
+                        )
+                        continue
+
+                    decoded_secret = ""
+                    try:
+                        decoded_secret = decode_benign_message(
+                            benign_text=benign,
+                            epoch=decode_epoch,
+                            artifact_class=artifact_class,
+                            artifact_context=artifact_context,
+                        )
+                    except Exception as e:
+                        print(f"[WARN] Decoding error: {e}")
+                        decoded_secret = ""
+
+                    print("\n--- DECODED SECRET ---")
+                    if decoded_secret.strip():
+                        print(decoded_secret)
                     else:
-                        print("\n--- DECODED (EXPLICIT TEST PAYLOAD) ---")
-                        print(msg)
-                else:
-                    secret = decode_benign_message(
-                        benign_text=benign,
+                        print("Decoding failed: text does not appear steganographic for the expected prior epoch.")
+
+                    trace_logger.append(
+                        experiment_id=ctx.experiment_id,
+                        role=role,
                         epoch=epoch_now,
                         artifact_class=artifact_class,
-                        artifact_context=artifact_context,
+                        identifier=identifier,
+                        url=url,
+                        semantic_text=benign,
+                        semantic_label="received",
+                        semantic_content_type="TokenBinning_ExplicitTesting",
                     )
-                    print("\n--- DECODED SECRET ---")
-                    print(secret)
-
-                trace_logger.append(
-                    experiment_id=ctx.experiment_id,
-                    role=role,
-                    epoch=epoch_now,
-                    artifact_class=artifact_class,
-                    identifier=identifier,
-                    url=url,
-                    semantic_text=benign,
-                    semantic_label="received",
-                    semantic_content_type="TokenBinning_ExplicitTesting",
-                )
 
         time.sleep(seconds_until_next_epoch(ctx))
 
 
+def hard_reset_due_to_snapshot_change(ctx) -> None:
+    print("\n[FATAL] Repository snapshot has changed.")
+    print("        This invalidates all sender/receiver state.")
+    print("        Both sender and receiver MUST restart from epoch 0.\n")
+
+    clear_pending_state(ctx)
+    try:
+        _receiver_buffer_path_for_ctx(ctx).unlink()
+    except Exception:
+        pass
+
+    try:
+        _snapshot_fp_path_for_ctx(ctx).unlink()
+    except Exception:
+        pass
+
+    sys.exit(1)
+
+
 if __name__ == "__main__":
     main()
-
-
