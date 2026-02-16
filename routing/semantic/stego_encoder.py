@@ -4,8 +4,8 @@ import json
 import os
 import re
 import math
-from typing import Dict, Any, List, Tuple, Optional
-from collections import defaultdict, Counter
+from typing import Dict, Any, List, Tuple, Optional, Set
+from collections import defaultdict
 import random
 from datetime import datetime
 import hashlib
@@ -27,25 +27,39 @@ client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ============================================================
-# BYTE-LEVEL Semantic Encoder
+# BYTE-LEVEL Semantic Encoder (with quiet mode)
 # ============================================================
 
 class ByteLevelSemanticEncoder:
-    """
-    Encodes bytes using semantic-choice bins.
+    # Map artifact classes to natural language descriptions
+    ARTIFACT_TYPE_MAP = {
+        "Issue": "GitHub issue",
+        "PullRequest": "pull request",
+        "GitTag": "release tag",
+        "Label": "label",
+        "Milestone": "milestone",
+        "IssueComment": "issue comment",
+        "PullRequestComment": "pull request comment",
+        "CommitComment": "commit comment",
+        "Repository": "repository",
+        "Commit": "commit",
+    }
 
-    IMPORTANT (no fallback):
-      - We will ONLY encode using bins loaded from bins_k*.json.
-      - If you have no bins that can encode at least 4 bits (size>=16),
-        encoding will HARD FAIL with a clear error.
+    # Artifact classes that are created as new comments (vs. editing the parent)
+    COMMENT_CLASSES = {"IssueComment", "PullRequestComment", "CommitComment"}
 
-    With your current output:
-      - You have 696 "small bins" (size 16-63).
-      - We will encode each byte as TWO NIBBLES using TWO SMALL BINS.
-        (This is not a synthetic fallback; it's using your real bins.)
-    """
+    # Cycle of artifact types to use for different chunks
+    ARTIFACT_CYCLE = [
+        ("IssueComment", True),
+        ("PullRequestComment", True),
+        ("CommitComment", True),
+        ("Issue", False),
+        ("PullRequest", False),
+        ("GitTag", False),
+    ]
 
-    def __init__(self, bins_path: str = "token_binning_data/bins_k16.json"):
+    def __init__(self, bins_path: str = "token_binning_data/bins_k16.json", quiet: bool = False):
+        self.quiet = quiet
         self.bins = []
         self.large_bins = []   # 256+ words
         self.medium_bins = []  # 64-255 words
@@ -53,29 +67,31 @@ class ByteLevelSemanticEncoder:
         self.tiny_bins = []    # 2-15 words
         self._load_byte_bins(bins_path)
 
-        print(f"\n📊 BYTE-LEVEL ENCODING CAPACITY")
-        print(f"  Large bins (256+ words): {len(self.large_bins)} - Byte encoding (8 bits)")
-        print(f"  Medium bins (64-255): {len(self.medium_bins)} - 6-7 bit encoding")
-        print(f"  Small bins (16-63 words): {len(self.small_bins)} - 4-5 bit encoding")
-        print(f"  Tiny bins (2-15): {len(self.tiny_bins)} - 1-3 bit encoding")
+        if not self.quiet:
+            print(f"\n📊 BYTE-LEVEL ENCODING CAPACITY")
+            print(f"  Large bins (256+ words): {len(self.large_bins)} - Byte encoding (8 bits)")
+            print(f"  Medium bins (64-255): {len(self.medium_bins)} - 6-7 bit encoding")
+            print(f"  Small bins (16-63 words): {len(self.small_bins)} - 4-5 bit encoding")
+            print(f"  Tiny bins (2-15): {len(self.tiny_bins)} - 1-3 bit encoding")
 
-        # No misleading claim about "splitting into bits" when you have no tiny bins
         if len(self.large_bins) == 0 and len(self.medium_bins) == 0 and len(self.small_bins) < 2:
             raise RuntimeError(
                 "No usable bins to encode. Need at least 2 bins with size>=16 "
                 "(small/medium/large) to encode bytes as two nibbles."
             )
 
-        if len(self.large_bins) == 0:
-            print("⚠ NOTE: No 256-word bins available (no direct 8-bit/choice encoding).")
-        if len(self.medium_bins) == 0:
-            print("⚠ NOTE: No 64-word bins available (no 6-7 bit/choice encoding).")
-        if len(self.small_bins) >= 2:
-            print("✅ Using SMALL bins to encode bytes as TWO NIBBLES (4 bits + 4 bits).")
+        if not self.quiet:
+            if len(self.large_bins) == 0:
+                print("⚠ NOTE: No 256-word bins available (no direct 8-bit/choice encoding).")
+            if len(self.medium_bins) == 0:
+                print("⚠ NOTE: No 64-word bins available (no 6-7 bit/choice encoding).")
+            if len(self.small_bins) >= 2:
+                print("✅ Using SMALL bins to encode bytes as TWO NIBBLES (4 bits + 4 bits).")
 
     def _load_byte_bins(self, bins_path: str):
         """Load bins."""
-        print(f"Loading byte-level bins from {bins_path}...")
+        if not self.quiet:
+            print(f"Loading byte-level bins from {bins_path}...")
 
         with open(bins_path, 'r', encoding="utf-8") as f:
             data = json.load(f)
@@ -105,21 +121,34 @@ class ByteLevelSemanticEncoder:
                 else:
                     self.tiny_bins.append(bin_info)
 
-        print(f"✓ Loaded {len(self.bins)} byte-level bins")
+        if not self.quiet:
+            print(f"✓ Loaded {len(self.bins)} byte-level bins")
 
     def encode_message(self, message: str, context: Dict[str, Any]) -> tuple[list[Any], list[Any]]:
-        """Encode message."""
-        print(f"\n🔐 BYTE-LEVEL ENCODING: '{message}'")
+        """
+        Encode message using the provided context.
+        Returns (stegotexts, positions_data)
+        """
+        if not self.quiet:
+            print(f"\n🔐 BYTE-LEVEL ENCODING: '{message}'")
+
+        # Extract context fields with defaults
+        artifact_class = context.get("artifact_class", "IssueComment")
+        parent_text = context.get("parent_text", "")
+        repo_files = context.get("repo_files", {})
+        repo_context = context.get("repo_context", "authentication system")
+        file_context = context.get("file_context", "")
 
         message_bytes = message.encode('utf-8')
-        print(f"  Message bytes: {len(message_bytes)}")
-        print(f"  Message bits: {len(message_bytes) * 8}")
+        if not self.quiet:
+            print(f"  Message bytes: {len(message_bytes)}")
+            print(f"  Message bits: {len(message_bytes) * 8}")
 
         choices = self._create_byte_choices(message_bytes)
-        print(f"  Created {len(choices)} encoding choices")
+        if not self.quiet:
+            print(f"  Created {len(choices)} encoding choices")
 
         if not choices:
-            # No fallback: hard fail with root cause
             raise RuntimeError(
                 "Created 0 encoding choices. This means you have no bins capable of encoding "
                 "your message under the current rules. For nibble encoding you need at least "
@@ -127,27 +156,52 @@ class ByteLevelSemanticEncoder:
             )
 
         bits_per_choice = sum(c.get('bits', 0) for c in choices) / len(choices)
-        print(f"  Average bits per choice: {bits_per_choice:.1f}")
+        if not self.quiet:
+            print(f"  Average bits per choice: {bits_per_choice:.1f}")
 
-        chunks: List[str] = []
+        # Group choices into larger chunks (target 64 bits per chunk)
+        chunks: List[List[Dict]] = self._byte_chunking(choices, target_bits_per_chunk=64)
+
+        stegotexts: List[str] = []
         positions_data: List[Dict[str, Any]] = []
+        used_words_global: Set[str] = set()      # track words already used to avoid repetition
+        previous_stegotexts: List[str] = []      # track full texts for repetition warnings
 
-        for chunk_idx, chunk_choices in enumerate(self._byte_chunking(choices)):
-            print(f"\n  --- Chunk {chunk_idx + 1} ---")
-            print(f"  Encoding {len(chunk_choices)} choices")
+        for chunk_idx, chunk_choices in enumerate(chunks):
+            if not self.quiet:
+                print(f"\n  --- Chunk {chunk_idx + 1} ---")
+                print(f"  Encoding {len(chunk_choices)} choices")
+
+            # Rotate the parent text by taking a different sentence or portion
+            sentences = re.split(r'(?<=[.!?])\s+', parent_text) if parent_text else [""]
+            if sentences and sentences[0]:
+                parent_for_chunk = sentences[chunk_idx % len(sentences)]
+            else:
+                parent_for_chunk = parent_text
 
             chunk_text, chunk_positions = self._generate_byte_chunk(
-                context, chunk_idx, chunk_choices
+                context={
+                    "artifact_class": artifact_class,
+                    "parent_text": parent_for_chunk,
+                    "repo_files": repo_files,
+                    "repo_context": repo_context,
+                    "file_context": file_context,
+                },
+                chunk_idx=chunk_idx,
+                choices=chunk_choices,
+                used_words_global=used_words_global,
+                previous_stegotexts=previous_stegotexts,
             )
 
-            # ALWAYS show the stegotext chunk immediately (this is what you asked for)
-            print("\n    📝 STEGOTEXT (Chunk {0})".format(chunk_idx + 1))
-            if chunk_text:
-                print("    " + chunk_text)
-            else:
-                print("    (No text generated)")
+            if not self.quiet:
+                print("\n    📝 STEGOTEXT (Chunk {0})".format(chunk_idx + 1))
+                if chunk_text:
+                    print("    " + chunk_text)
+                else:
+                    print("    (No text generated)")
 
-            chunks.append(chunk_text)
+            stegotexts.append(chunk_text)
+            previous_stegotexts.append(chunk_text)
 
             chunk_bits = sum(c.get('bits', 0) for c in chunk_choices)
             positions_data.append({
@@ -158,33 +212,39 @@ class ByteLevelSemanticEncoder:
                 'text_preview': chunk_text[:160] + "..." if len(chunk_text) > 160 else chunk_text
             })
 
-            # Print the stego mapping per chunk
-            print(f"\n    🔎 STEGOCHUNK MAP (Chunk {chunk_idx + 1})")
-            if not chunk_text:
-                print("    (No text generated)")
-            else:
-                pos_by_id = {p.get("choice_id"): p for p in chunk_positions}
-                for ch in chunk_choices:
-                    cid = ch.get("choice_id")
-                    enc_type = ch.get("encoding_type", "unknown")
-                    bits = ch.get("bits", 0)
-                    target = ch.get("target_index", None)
+            # Add the words that were actually used to the global set to avoid repetition
+            for pos in chunk_positions:
+                word = pos.get('chosen_word')
+                if word:
+                    used_words_global.add(word.lower())
 
-                    if cid in pos_by_id:
-                        p = pos_by_id[cid]
-                        print(
-                            f"    choice_id={cid:>4} | {enc_type:<11} {bits:>2}b | "
-                            f"target_index={str(target):<4} | chosen_index={str(p.get('chosen_index')):<4} | "
-                            f"word='{p.get('chosen_word')}'"
-                        )
-                    else:
-                        print(
-                            f"    choice_id={cid:>4} | {enc_type:<11} {bits:>2}b | "
-                            f"target_index={str(target):<4} | NOT ENCODED"
-                        )
-            print("")
+            if not self.quiet:
+                print(f"\n    🔎 STEGOCHUNK MAP (Chunk {chunk_idx + 1})")
+                if not chunk_text:
+                    print("    (No text generated)")
+                else:
+                    pos_by_id = {p.get("choice_id"): p for p in chunk_positions}
+                    for ch in chunk_choices:
+                        cid = ch.get("choice_id")
+                        enc_type = ch.get("encoding_type", "unknown")
+                        bits = ch.get("bits", 0)
+                        target = ch.get("target_index", None)
 
-        return chunks, positions_data
+                        if cid in pos_by_id:
+                            p = pos_by_id[cid]
+                            print(
+                                f"    choice_id={cid:>4} | {enc_type:<11} {bits:>2}b | "
+                                f"target_index={str(target):<4} | chosen_index={str(p.get('chosen_index')):<4} | "
+                                f"word='{p.get('chosen_word')}'"
+                            )
+                        else:
+                            print(
+                                f"    choice_id={cid:>4} | {enc_type:<11} {bits:>2}b | "
+                                f"target_index={str(target):<4} | NOT ENCODED"
+                            )
+                print("")
+
+        return stegotexts, positions_data
 
     def _create_byte_choices(self, message_bytes: bytes) -> List[Dict]:
         """Create choices."""
@@ -193,7 +253,6 @@ class ByteLevelSemanticEncoder:
         for i, byte_value in enumerate(message_bytes):
             byte_choice = self._encode_byte(byte_value, i)
             if byte_choice is None:
-                # No fallback: hard fail (do NOT pretend we split into bits)
                 raise RuntimeError(
                     f"Byte {i} (0x{byte_value:02x}) could not be encoded with available bins.\n"
                     f"Have: large={len(self.large_bins)}, medium={len(self.medium_bins)}, small={len(self.small_bins)}, tiny={len(self.tiny_bins)}.\n"
@@ -208,19 +267,18 @@ class ByteLevelSemanticEncoder:
             else:
                 choices.append(byte_choice)
 
-        # Fix choice_id labels (your old _get_current_choices() was always [])
         for idx, ch in enumerate(choices):
             ch["choice_id"] = idx
 
-        # Encoding distribution (useful sanity)
         encoding_stats = defaultdict(int)
         for choice in choices:
             encoding_stats[choice.get('encoding_type', 'unknown')] += 1
 
-        print("  Encoding distribution:")
-        for enc_type, count in sorted(encoding_stats.items()):
-            bits = {'byte': 8, 'high_nibble': 4, 'low_nibble': 4}.get(enc_type, 0)
-            print(f"    {enc_type}: {count} choices ({bits} bits each)")
+        if not self.quiet:
+            print("  Encoding distribution:")
+            for enc_type, count in sorted(encoding_stats.items()):
+                bits = {'byte': 8, 'high_nibble': 4, 'low_nibble': 4}.get(enc_type, 0)
+                print(f"    {enc_type}: {count} choices ({bits} bits each)")
 
         return choices
 
@@ -248,14 +306,13 @@ class ByteLevelSemanticEncoder:
             high_bin = self.medium_bins[byte_index % len(self.medium_bins)]
             low_bin = self.medium_bins[(byte_index + 1) % len(self.medium_bins)]
 
-            # Must be >=16 to index 0..15
             if len(high_bin['tokens']) >= 16 and len(low_bin['tokens']) >= 16:
                 return [
                     {
                         'nibble_value': high_nibble,
                         'cluster_id': high_bin['bin_id'],
                         'cluster_words': high_bin['tokens'],
-                        'target_index': high_nibble,  # direct nibble -> index 0..15
+                        'target_index': high_nibble,
                         'bits': 4,
                         'encoding_type': 'high_nibble',
                         'byte_index': byte_index
@@ -264,14 +321,14 @@ class ByteLevelSemanticEncoder:
                         'nibble_value': low_nibble,
                         'cluster_id': low_bin['bin_id'],
                         'cluster_words': low_bin['tokens'],
-                        'target_index': low_nibble,   # direct nibble -> index 0..15
+                        'target_index': low_nibble,
                         'bits': 4,
                         'encoding_type': 'low_nibble',
                         'byte_index': byte_index
                     }
                 ]
 
-        # 3) Nibble encoding with SMALL bins (>=16)  ✅ THIS IS WHAT YOU NEED RIGHT NOW
+        # 3) Nibble encoding with SMALL bins (>=16)
         if len(self.small_bins) >= 2:
             high_nibble = (byte_value >> 4) & 0x0F
             low_nibble = byte_value & 0x0F
@@ -279,14 +336,13 @@ class ByteLevelSemanticEncoder:
             high_bin = self.small_bins[byte_index % len(self.small_bins)]
             low_bin = self.small_bins[(byte_index + 1) % len(self.small_bins)]
 
-            # Must be >=16 to represent a nibble without modulo distortion
             if len(high_bin['tokens']) >= 16 and len(low_bin['tokens']) >= 16:
                 return [
                     {
                         'nibble_value': high_nibble,
                         'cluster_id': high_bin['bin_id'],
                         'cluster_words': high_bin['tokens'],
-                        'target_index': high_nibble,  # 0..15
+                        'target_index': high_nibble,
                         'bits': 4,
                         'encoding_type': 'high_nibble',
                         'byte_index': byte_index
@@ -295,18 +351,17 @@ class ByteLevelSemanticEncoder:
                         'nibble_value': low_nibble,
                         'cluster_id': low_bin['bin_id'],
                         'cluster_words': low_bin['tokens'],
-                        'target_index': low_nibble,   # 0..15
+                        'target_index': low_nibble,
                         'bits': 4,
                         'encoding_type': 'low_nibble',
                         'byte_index': byte_index
                     }
                 ]
 
-        # No fallback allowed.
         return None
 
-    def _byte_chunking(self, choices: List[Dict], target_bits_per_chunk: int = 32) -> List[List[Dict]]:
-        """Group choices into chunks."""
+    def _byte_chunking(self, choices: List[Dict], target_bits_per_chunk: int = 64) -> List[List[Dict]]:
+        """Group choices into chunks of at least target_bits_per_chunk bits."""
         chunks: List[List[Dict]] = []
         current_chunk: List[Dict] = []
         current_bits = 0
@@ -315,7 +370,7 @@ class ByteLevelSemanticEncoder:
             current_chunk.append(choice)
             current_bits += choice.get('bits', 1)
 
-            if current_bits >= target_bits_per_chunk or len(current_chunk) >= 4:
+            if current_bits >= target_bits_per_chunk:
                 chunks.append(current_chunk)
                 current_chunk = []
                 current_bits = 0
@@ -327,20 +382,28 @@ class ByteLevelSemanticEncoder:
 
     def _generate_byte_chunk(self, context: Dict[str, Any],
                              chunk_idx: int,
-                             choices: List[Dict]) -> Tuple[str, List[Dict]]:
-        """Generate natural text for encoding."""
+                             choices: List[Dict],
+                             used_words_global: Set[str],
+                             previous_stegotexts: List[str]) -> Tuple[str, List[Dict]]:
+        """Generate natural text for encoding, with variety and avoiding repetition."""
+        # Cycle through artifact types based on chunk index
+        artifact_class, is_comment = self.ARTIFACT_CYCLE[chunk_idx % len(self.ARTIFACT_CYCLE)]
+        artifact_type_desc = self.ARTIFACT_TYPE_MAP.get(artifact_class, "GitHub discussion")
+
+        parent_text = context.get("parent_text", "")
+        repo_files = context.get("repo_files", {})
         repo_context = context.get("repo_context", "authentication system")
 
-        artifact_types = [
-            "GitHub issue comment",
-            "Pull request description",
-            "Code review feedback",
-            "Technical discussion",
-            "README update"
-        ]
-
-        artifact_type = artifact_types[chunk_idx % len(artifact_types)]
-        prompt = self._build_byte_prompt(artifact_type, repo_context, choices)
+        prompt = self._build_byte_prompt(
+            artifact_type=artifact_type_desc,
+            is_comment=is_comment,
+            parent_text=parent_text,
+            repo_files=repo_files,
+            repo_context=repo_context,
+            choices=choices,
+            used_words_global=used_words_global,
+            previous_stegotexts=previous_stegotexts,
+        )
 
         try:
             response = client.chat.completions.create(
@@ -348,15 +411,15 @@ class ByteLevelSemanticEncoder:
                 messages=[
                     ChatCompletionSystemMessageParam(
                         role="system",
-                        content="You are a technical writer on GitHub. Write naturally and professionally."
+                        content="You are a technical writer on GitHub. Write naturally and professionally, using proper English casing. Words from the provided list may be capitalized in the list, but you should lowercase them when they appear mid‑sentence unless they are proper nouns or acronyms that should remain uppercase. For example, 'Blueprint' should become 'blueprint' in the middle of a sentence."
                     ),
                     ChatCompletionUserMessageParam(
                         role="user",
                         content=prompt
                     )
                 ],
-                temperature=0.7,
-                max_tokens=220,
+                temperature=0.8,
+                max_tokens=300,
                 top_p=0.9
             )
 
@@ -366,7 +429,8 @@ class ByteLevelSemanticEncoder:
             if not text.endswith(('.', '!', '?')):
                 text += '.'
 
-            print(f"    Generated {len(text.split())} words")
+            if not self.quiet:
+                print(f"    Generated {len(text.split())} words")
 
             positions = self._extract_byte_positions(text, choices)
 
@@ -374,44 +438,141 @@ class ByteLevelSemanticEncoder:
             total = len(choices)
             success = encoded / total * 100 if total > 0 else 0
 
-            print(f"    Encoded {encoded}/{total} choices ({success:.0f}%)")
+            if not self.quiet:
+                print(f"    Encoded {encoded}/{total} choices ({success:.0f}%)")
 
             return text, positions
 
         except Exception as e:
-            print(f"    ⚠ Error: {e}")
+            if not self.quiet:
+                print(f"    ⚠ Error: {e}")
             return "", []
 
-    def _build_byte_prompt(self, artifact_type: str, repo_context: str, choices: List[Dict]) -> str:
-        """Build prompt for encoding."""
-        sample_words: List[str] = []
-        for choice in choices[:6]:
+    def _build_byte_prompt(self, artifact_type: str, is_comment: bool,
+                           parent_text: str, repo_files: Dict[str, str],
+                           repo_context: str, choices: List[Dict],
+                           used_words_global: Set[str],
+                           previous_stegotexts: List[str]) -> str:
+        """
+        Build a prompt that asks the LLM to generate realistic content.
+        - Suggests up to 10 sample words from bins, excluding already used words.
+        - Allows only case changes (lowercase/uppercase) for natural flow – no other modifications.
+        - Explicitly encourages lowercasing bin words mid‑sentence.
+        - Explicitly allows mentioning existing files, forbids inventing new ones.
+        - Uses a generic repository summary (no explicit file list) to avoid bias.
+        """
+        # Gather all bin words from all choices (for variety)
+        all_bin_words = []
+        for choice in choices:
             cluster_words = choice.get('cluster_words', [])
-            if cluster_words:
-                # IMPORTANT: for nibble encoding, we want the model to use words from bins,
-                # but we do NOT want to show giant lists.
-                num_samples = min(2, len(cluster_words))
-                samples = random.sample(cluster_words, num_samples)
-                for word in samples:
-                    if word not in sample_words:
-                        sample_words.append(word)
+            all_bin_words.extend(cluster_words)
+
+        # Remove duplicates
+        unique_candidates = list(dict.fromkeys(all_bin_words))
+        random.shuffle(unique_candidates)
+
+        sample_words: List[str] = []
+        for word in unique_candidates:
+            word_lower = word.lower()
+            if word_lower not in used_words_global and word not in sample_words:
+                sample_words.append(word)
+                if len(sample_words) >= 10:
+                    break
 
         if not sample_words:
-            # This should basically never happen if bins exist, but keep it harmless.
-            sample_words = ["improvement", "optimization", "security", "performance"]
+            # Fallback: take any words (should rarely happen)
+            sample_words = unique_candidates[:6]
 
-        display_words = sample_words[:6]
+        display_words = ', '.join(sample_words)
 
-        prompt = f"""Write a {artifact_type} about {repo_context}.
+        # Generic repository summary (no file list – the LLM already knows the repo via system prompt)
+        repo_summary = "The repository contains source code and documentation relevant to the project.\n"
+
+        # Truncate parent text if too long
+        if len(parent_text) > 300:
+            parent_preview = parent_text[:300] + "..."
+        else:
+            parent_preview = parent_text
+
+        # Build a list of forbidden words (recently used)
+        forbidden_list = list(used_words_global)[-15:] if used_words_global else []
+        forbidden_str = ", ".join(forbidden_list) if forbidden_list else "none yet"
+
+        # Repetition warning with examples
+        repetition_warning = ""
+        if previous_stegotexts:
+            repetition_warning = (
+                f"\nIMPORTANT: The following comments have already been posted. "
+                f"Do NOT use the same words, phrases, or ideas. Be completely fresh.\n"
+                f"Words already used (do not reuse): {forbidden_str}\n"
+                f"Previous comments:\n"
+            )
+            for i, prev in enumerate(previous_stegotexts[-3:]):
+                repetition_warning += f"  {i+1}. {prev[:100]}...\n"
+            repetition_warning += "\n"
+
+        # Instruction to incorporate sample words – strongly encourage lowercasing
+        incorporate_instruction = (
+            f"As you write, naturally incorporate some of these words where they fit best: {display_words}\n"
+            "You may change the case of the words to fit grammatically (e.g., lowercase a capitalized word in the middle of a sentence). "
+            "In fact, you should **lowercase** them unless they are proper nouns or acronyms that should remain uppercase. "
+            "For example, if the word is 'Blueprint', you can write 'blueprint'.\n"
+            "You may mention specific files or artifacts that exist in the repository, but do NOT invent any files or content that do not exist."
+        )
+
+        if is_comment:
+            if parent_preview:
+                prompt = f"""{repo_summary}{repetition_warning}Write a new {artifact_type} replying to the following content:
+
+--- Original {artifact_type} ---
+{parent_preview}
+---
+
+Be concise and natural (3-4 sentences). The reply should be about {repo_context}.
+
+{incorporate_instruction}
+
+CRITICAL: Do NOT repeat any words from the forbidden list. Use fresh vocabulary.
+
+Write the reply:"""
+            else:
+                prompt = f"""{repo_summary}{repetition_warning}Write a new {artifact_type} about {repo_context}.
 
 Be concise and natural (3-4 sentences).
 
-As you write, naturally incorporate some of these words where they fit best: {', '.join(display_words)}
+{incorporate_instruction}
 
-IMPORTANT: Don't list the words. Use them naturally in context.
+CRITICAL: Do NOT repeat any words from the forbidden list. Use fresh vocabulary.
 
-Write naturally:
-"""
+Write naturally:"""
+        else:
+            if parent_preview:
+                prompt = f"""{repo_summary}{repetition_warning}You need to rewrite the following {artifact_type}:
+
+--- Original {artifact_type} ---
+{parent_preview}
+---
+
+The revised version should be about {repo_context} and must naturally incorporate some of these words: {display_words}
+
+Important guidelines:
+- Keep the same general meaning and tone.
+- Do not just add the words artificially; blend them in so the text reads naturally.
+- You may change the case of the words to fit grammatically (e.g., lowercase a capitalized word mid‑sentence). In fact, you should **lowercase** them unless they are proper nouns or acronyms.
+- You may mention specific files or artifacts that exist in the repository, but do NOT invent any files or content that do not exist.
+- CRITICAL: Do NOT repeat any words from the forbidden list. Use entirely fresh language.
+- Output only the rewritten {artifact_type} (no extra commentary)."""
+            else:
+                prompt = f"""{repo_summary}{repetition_warning}Write a {artifact_type} about {repo_context}.
+
+Be concise and natural (3-4 sentences).
+
+{incorporate_instruction}
+
+CRITICAL: Do NOT repeat any words from the forbidden list. Use fresh vocabulary.
+
+Write the {artifact_type}:"""
+
         return prompt
 
     def _extract_byte_positions(self, text: str, choices: List[Dict]) -> List[Dict]:
@@ -448,17 +609,31 @@ Write naturally:
 
 
 # ============================================================
-# Byte-Level Main Encoder
+# Byte-Level Main Encoder (wrapper for routing system)
 # ============================================================
 
 class ByteLevelStegoEncoder:
-    def __init__(self, bins_path: str = "token_binning_data/bins_k16.json"):
-        self.encoder = ByteLevelSemanticEncoder(bins_path)
+    def __init__(self, bins_path: str = "token_binning_data/bins_k16.json", quiet: bool = False):
+        self.encoder = ByteLevelSemanticEncoder(bins_path, quiet=quiet)
 
     def encode(self, message: str, context: Dict[str, Any],
                positions_filename: Optional[str] = None) -> List[str]:
-        print(f"\n📤 BYTE-LEVEL ENCODING: '{message}'")
-        print(f"  Length: {len(message)} chars = {len(message.encode('utf-8'))} bytes")
+        """
+        Encode a secret message into stegotext chunks.
+
+        context must contain:
+          - artifact_class : str
+          - parent_text    : str (original content of the artifact being used)
+          - repo_files     : Dict[str, str] (optional, from grounding index)
+          - repo_context   : str (optional)
+          - file_context   : str (optional)
+        """
+        if not self.encoder.quiet:
+            print(f"\n📤 BYTE-LEVEL ENCODING: '{message}'")
+            print(f"  Length: {len(message)} chars = {len(message.encode('utf-8'))} bytes")
+            print(f"  Artifact class: {context.get('artifact_class', 'unknown')}")
+            print(f"  Parent text length: {len(context.get('parent_text', ''))} chars")
+            print(f"  Repository files available: {len(context.get('repo_files', {}))}")
 
         chunks, positions_data = self.encoder.encode_message(message, context)
 
@@ -466,23 +641,22 @@ class ByteLevelStegoEncoder:
         message_bytes = len(message.encode('utf-8'))
         message_bits = message_bytes * 8
 
-        print(f"\n📊 BYTE-LEVEL RESULTS")
-        print(f"  Message: {message_bytes} bytes ({message_bits} bits)")
-        print(f"  Encoded bits: {total_bits}")
-        print(f"  Chunks generated: {len(chunks)}")
-        print(f"  Bits per chunk: {total_bits / len(chunks) if chunks else 0:.1f}")
-        print(f"  Efficiency: {total_bits / message_bits * 100:.1f}%")
+        if not self.encoder.quiet:
+            print(f"\n📊 BYTE-LEVEL RESULTS")
+            print(f"  Message: {message_bytes} bytes ({message_bits} bits)")
+            print(f"  Encoded bits: {total_bits}")
+            print(f"  Chunks generated: {len(chunks)}")
+            print(f"  Bits per chunk: {total_bits / len(chunks) if chunks else 0:.1f}")
+            print(f"  Efficiency: {total_bits / message_bits * 100:.1f}%")
 
-        # NOTE: with nibble encoding and your chunking rules,
-        # you will NOT get 3-5 chunks for 28 bytes. That target requires 8-bit/choice bins (>=256).
-        original_chunks = message_bytes * 2
-        new_chunks = len(chunks)
-        reduction = (original_chunks - new_chunks) / original_chunks * 100 if original_chunks > 0 else 0
+            original_chunks = message_bytes * 2
+            new_chunks = len(chunks)
+            reduction = (original_chunks - new_chunks) / original_chunks * 100 if original_chunks > 0 else 0
 
-        print(f"\n🎯 IMPROVEMENT:")
-        print(f"  Original system (bit-level): ~{original_chunks} chunks")
-        print(f"  Byte-level system: {new_chunks} chunks")
-        print(f"  Reduction: {reduction:.0f}%")
+            print(f"\n🎯 IMPROVEMENT:")
+            print(f"  Original system (bit-level): ~{original_chunks} chunks")
+            print(f"  Byte-level system: {new_chunks} chunks")
+            print(f"  Reduction: {reduction:.0f}%")
 
         if positions_filename:
             self._save_positions(positions_filename, positions_data)
@@ -502,88 +676,8 @@ class ByteLevelStegoEncoder:
                     },
                     'chunks': data
                 }, f, indent=2)
-            print(f"✓ Positions saved: {filename}")
+            if not self.encoder.quiet:
+                print(f"✓ Positions saved: {filename}")
         except Exception as e:
-            print(f"⚠ Could not save: {e}")
-
-
-# ============================================================
-# Test
-# ============================================================
-
-def test_byte_level():
-    print("\n" + "=" * 80)
-    print("BYTE-LEVEL STEGANOGRAPHY ENCODER")
-    print("Encodes whole bytes (via bins) — NO synthetic fallback")
-    print("=" * 80)
-    print("NOTE: With only 16–63 word bins, this encodes bytes as two nibbles.")
-    print("=" * 80)
-
-    try:
-        encoder = ByteLevelStegoEncoder("token_binning_data/bins_k16.json")
-
-        message = "We will meet at 9pm tonight."
-        print(f"\nMessage: '{message}' ({len(message.encode('utf-8'))} bytes)")
-
-        context = {
-            "repo_context": "authentication system",
-            "file_context": "src/auth/login.js"
-        }
-
-        print("\n" + "=" * 80)
-        print("ENCODING...")
-        print("=" * 80)
-
-        out_file = "byte_level_test.json"
-        chunks = encoder.encode(message, context, out_file)
-
-        print(f"\nGenerated {len(chunks)} artifacts:")
-        for i, chunk in enumerate(chunks):
-            words = len(chunk.split())
-            print(f"\n--- Artifact {i + 1} ({words} words) ---")
-            print(chunk)
-            print("-" * 60)
-
-        print("\n" + "=" * 80)
-        print("STEGOPOSITIONS (from saved file)")
-        print("=" * 80)
-        try:
-            with open(out_file, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            for ch in saved.get("chunks", []):
-                cid = ch.get("chunk_id")
-                print(f"\n--- Chunk {cid + 1} positions ---")
-                for p in ch.get("positions", []):
-                    print(
-                        f"choice_id={p.get('choice_id'):>4} | {p.get('encoding_type', 'unknown'):<11} "
-                        f"{p.get('bits', 0):>2}b | target_index={p.get('target_index')} | "
-                        f"chosen_index={p.get('chosen_index')} | word='{p.get('chosen_word')}'"
-                    )
-        except Exception as e:
-            print(f"⚠ Could not read {out_file}: {e}")
-
-        return True, chunks
-
-    except Exception as e:
-        print(f"\n❌ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return False, []
-
-
-# ============================================================
-# Run
-# ============================================================
-
-if __name__ == "__main__":
-    success, chunks = test_byte_level()
-
-    print("\n" + "=" * 80)
-    if success:
-        print("✅ BYTE-LEVEL ENCODER COMPLETE")
-        print("   - Uses ONLY real bins (no synthetic fallback)")
-        print("   - With small bins: encodes bytes as two nibbles (4+4 bits)")
-        print("   - Prints stegotext chunks and per-choice mappings")
-    else:
-        print("❌ BYTE-LEVEL ENCODER FAILED")
-    print("=" * 80)
+            if not self.encoder.quiet:
+                print(f"⚠ Could not save: {e}")
