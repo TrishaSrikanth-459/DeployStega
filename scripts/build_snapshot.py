@@ -7,7 +7,7 @@ Authoritative experiment initializer for DeployStega.
 
 This version:
 - Captures routing artifacts (issues, PRs, commits, tags, labels, milestones)
-- Captures sampled repository file contents (diff-aware grounding)
+- Stores ALL repository file names (no content, no sampling)
 - Writes routing snapshot and grounding index as SEPARATE files
 - Writes a VALID experiment manifest (with epoch config)
 - Guarantees ASCII-safe, size-bounded JSON output
@@ -42,20 +42,10 @@ MANIFEST_PATH = Path("experiments/experiment_manifest.json")
 GITHUB_API = "https://api.github.com"
 TOKEN_ENV = "GITHUB_TOKEN"
 
-MAX_EXCERPT_CHARS = 800
-MAX_FILES_TO_SAMPLE = 20
-MAX_FILE_BYTES = 20_000
-
 # epoch config defaults (must satisfy ExperimentContext contract)
 EPOCH_START_DELAY_SECONDS = 10
 EPOCH_DURATION_SECONDS = 30
 EPOCH_WINDOW_SIZE = 1  # ✅ REQUIRED (ExperimentContext reads epoch["window_size"])
-
-ALLOWED_TEXT_EXTENSIONS = {
-    ".py", ".txt", ".md", ".json", ".yaml", ".yml",
-    ".toml", ".ini", ".cfg", ".js", ".ts", ".rs",
-    ".go", ".java", ".c", ".h", ".cpp",
-}
 
 HEADERS = {
     "Accept": "application/vnd.github+json",
@@ -110,13 +100,6 @@ def generate_id() -> str:
     return secrets.token_hex(16)
 
 
-def _clean_excerpt(text: Optional[str]) -> str:
-    t = (text or "").replace("\x00", "").strip()
-    # ASCII-safe
-    t = "".join(c for c in t if ord(c) < 128)
-    return t[:MAX_EXCERPT_CHARS]
-
-
 def _artifact_key(cls: ArtifactClass, identifier: List[Any]) -> str:
     if cls == ArtifactClass.Repository:
         o, r = identifier
@@ -140,24 +123,16 @@ def _artifact_key(cls: ArtifactClass, identifier: List[Any]) -> str:
 
 
 # ============================================================
-# Repository file capture (grounding)
+# Repository file name capture (grounding) – NO CONTENT
 # ============================================================
 
-def _is_text_file(path: str) -> bool:
-    return any(path.endswith(ext) for ext in ALLOWED_TEXT_EXTENSIONS)
-
-
-def _walk_tree(tree_url: str, out: Dict[str, str]) -> None:
-    if len(out) >= MAX_FILES_TO_SAMPLE:
-        return
-
+def _walk_tree(tree_url: str, out: List[str]) -> None:
+    """Recursively collect all blob paths from the Git tree."""
     tree = _request_json(tree_url)
     if not isinstance(tree, dict):
         return
 
     for entry in tree.get("tree", []):
-        if len(out) >= MAX_FILES_TO_SAMPLE:
-            return
         if not isinstance(entry, dict):
             continue
 
@@ -167,38 +142,31 @@ def _walk_tree(tree_url: str, out: Dict[str, str]) -> None:
         if etype == "tree" and isinstance(entry.get("url"), str):
             _walk_tree(entry["url"], out)
 
-        elif etype == "blob":
-            if not isinstance(path, str) or not _is_text_file(path):
-                continue
-
-            size = entry.get("size", 0)
-            if not isinstance(size, int) or size <= 0 or size > MAX_FILE_BYTES:
-                continue
-
-            blob_url = entry.get("url")
-            if not isinstance(blob_url, str):
-                continue
-
-            blob = _request_json(blob_url)
-            if not isinstance(blob, dict):
-                continue
-            if blob.get("encoding") != "base64":
-                continue
-
-            try:
-                raw = base64.b64decode(blob.get("content", ""))
-                text = raw.decode("utf-8", errors="ignore")
-                out[path] = _clean_excerpt(text)
-            except Exception:
-                continue
+        elif etype == "blob" and isinstance(path, str):
+            out.append(path)
 
 
 def fetch_repo_grounding(owner: str, repo: str, branch: str) -> Dict[str, str]:
-    files: Dict[str, str] = {}
-    root = _request_json(f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{branch}")
-    if isinstance(root, dict) and isinstance(root.get("url"), str):
-        _walk_tree(root["url"], files)
-    return files
+    """
+    Returns a dictionary {file_path: ""} for every file in the repository.
+    Values are empty strings (no content is stored).
+    """
+    file_paths: List[str] = []
+    root = _request_json(f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
+    if isinstance(root, dict):
+        # The recursive parameter returns all files in one go (avoids deep recursion)
+        for item in root.get("tree", []):
+            if isinstance(item, dict) and item.get("type") == "blob":
+                path = item.get("path")
+                if isinstance(path, str):
+                    file_paths.append(path)
+    else:
+        # Fallback to manual recursion if recursive param fails
+        if isinstance(root, dict) and isinstance(root.get("url"), str):
+            _walk_tree(root["url"], file_paths)
+
+    # Return as dict with empty strings (keeps interface compatible)
+    return {path: "" for path in file_paths}
 
 
 # ============================================================
@@ -231,7 +199,7 @@ def build_snapshot(
     # Repository
     add_artifact(ArtifactClass.Repository, [owner, repo])
 
-    # Grounding
+    # Grounding (file names only)
     if isinstance(default_branch, str):
         grounding_index[f"Repository:{owner}/{repo}"] = {
             "kind": "Repository",
