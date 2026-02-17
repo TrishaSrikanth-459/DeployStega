@@ -21,7 +21,6 @@ def _stable_artifact_ids(rec: RoutingTraceRecord) -> Tuple[Any, ...]:
 
 
 def _stable_metadata(rec: RoutingTraceRecord) -> Tuple[Any, ...]:
-    # Keep routing fields immutable + include semantic payload if present.
     base = (
         ("role", rec.role),
         ("epoch", rec.epoch),
@@ -79,6 +78,10 @@ def routing_record_to_event(
         action_type=rec.action_type,
         artifact_ids=_stable_artifact_ids(rec),
         metadata=_stable_metadata(rec),
+        semantic_ref=rec.semantic_ref,
+        semantic_content=rec.semantic_text,
+        semantic_label=rec.semantic_label,
+        semantic_type=rec.semantic_content_type,
     )
 
 
@@ -122,21 +125,24 @@ def records_to_events_by_user(
         for idx, r in enumerate(recs_sorted):
             if r.timestamp is not None:
                 ts = float(r.timestamp)
+                # For records with timestamp, we still need to pass something to routing_record_to_event.
+                # The function will ignore these because rec.timestamp is set.
+                pos = 0
+                bucket_size = 1
             else:
                 indices = by_epoch[r.epoch]
                 pos = indices.index(idx)
+                bucket_size = len(indices)
                 ts = _synthesize_timestamp(
-                    timing_policy, r, index_within_bucket=pos, bucket_size=len(indices)
+                    timing_policy, r, index_within_bucket=pos, bucket_size=bucket_size
                 )
 
-            events.append(
-                InteractionEvent(
-                    timestamp=ts,
-                    action_type=r.action_type,
-                    artifact_ids=_stable_artifact_ids(r),
-                    metadata=_stable_metadata(r),
-                )
-            )
+            events.append(routing_record_to_event(
+                r,
+                timing_policy=timing_policy,
+                index_within_bucket=pos,
+                bucket_size=bucket_size
+            ))
 
         events_sorted = sorted(events, key=lambda e: (e.timestamp, e.action_type, e.artifact_ids, e.metadata))
         out[user] = tuple(events_sorted)
