@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """
 Adversarial evaluation pipeline for DeployStega using pre‑generated datasets.
-
-This script:
-- Loads many dataset files from two directories: benign/ and covert/.
-- Extracts a feature vector for each dataset (using the same feature extractors).
-- Trains a classifier to distinguish benign from covert datasets.
-- Computes empirical ε = ln(TPR/FPR) at a target FPR and saves ROC curves.
+Optimized with parallel processing for faster feature extraction.
 
 Usage:
     python adversarial_evaluation.py --features {behavioral,semantic,cross} \\
@@ -15,7 +10,8 @@ Usage:
                                      --covert-dir path/to/covert_datasets/ \\
                                      [--target-fpr 0.05] [--test-size 0.3] \\
                                      [--seed 42] [--output-dir results] \\
-                                     [--manifest-path experiments/experiment_manifest.json]
+                                     [--manifest-path experiments/experiment_manifest.json] \\
+                                     [--workers 4] [--no-progress]
 """
 
 import numpy as np
@@ -30,6 +26,16 @@ import joblib
 import argparse
 import json
 import matplotlib.pyplot as plt
+import concurrent.futures
+import os
+import functools
+
+# Optional progress bar
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -79,6 +85,10 @@ def parse_args():
                         help="Directory to save results (default: results)")
     parser.add_argument("--manifest-path", type=str, default="experiments/experiment_manifest.json",
                         help="Path to experiment manifest JSON (optional)")
+    parser.add_argument("--workers", type=int, default=os.cpu_count(),
+                        help="Number of parallel workers (default: number of CPU cores)")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable progress bar (use simple prints)")
     return parser.parse_args()
 
 
@@ -291,6 +301,43 @@ def plot_roc(fpr, tpr, auc_val, title, save_path):
 
 
 # ----------------------------------------------------------------------
+# Parallel processing helper
+# ----------------------------------------------------------------------
+def process_files(file_list, extractors, template, timing_policy, desc, use_progress, workers):
+    """
+    Process a list of files in parallel, returning list of feature vectors.
+    Skips files that raise exceptions.
+    """
+    # Create a partial function with fixed arguments
+    worker_func = functools.partial(
+        extract_feature_vector_from_file,
+        extractors=extractors,
+        template=template,
+        timing_policy=timing_policy
+    )
+
+    vectors = []
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+        future_to_file = {executor.submit(worker_func, fpath): fpath for fpath in file_list}
+        futures = list(future_to_file.keys())
+        if use_progress and HAS_TQDM:
+            iterator = tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=desc)
+        else:
+            iterator = concurrent.futures.as_completed(futures)
+            if not use_progress:
+                print(f"Processing {len(file_list)} files with {workers} workers...")
+
+        for future in iterator:
+            fpath = future_to_file[future]
+            try:
+                vec = future.result()
+                vectors.append(vec)
+            except Exception as e:
+                print(f"Error processing {fpath}: {e}, skipping")
+    return vectors
+
+
+# ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
 def main():
@@ -302,7 +349,7 @@ def main():
     with open(out_dir / "args.json", "w") as f:
         json.dump(vars(args), f, indent=2)
 
-    print("\n=== DeployStega Adversarial Evaluation (Pre‑generated Datasets) ===")
+    print("\n=== DeployStega Adversarial Evaluation (Pre‑generated Datasets, Parallel) ===")
     print(f"Feature set   : {args.features}")
     print(f"Classifier    : {args.classifier}")
     print(f"Benign dir    : {args.benign_dir}")
@@ -310,6 +357,8 @@ def main():
     print(f"Target FPR    : {args.target_fpr}")
     print(f"Test size     : {args.test_size}")
     print(f"Seed          : {args.seed}")
+    print(f"Workers       : {args.workers}")
+    print(f"Progress bar  : {'disabled' if args.no_progress else 'enabled'}")
     print(f"Output dir    : {out_dir}\n")
 
     # Optional timing policy
@@ -336,31 +385,23 @@ def main():
     print(f"Building template from first benign file: {benign_files[0].name}")
     template = build_template_from_file(benign_files[0], extractors, timing_policy)
 
-    # Extract vectors for all benign files
-    print(f"\nExtracting feature vectors from {len(benign_files)} benign datasets...")
-    benign_vectors = []
-    for fpath in benign_files:
-        try:
-            vec = extract_feature_vector_from_file(fpath, extractors, template, timing_policy)
-            benign_vectors.append(vec)
-        except Exception as e:
-            print(f"Error processing {fpath}: {e}, skipping")
+    # Extract vectors for all benign files (parallel)
+    benign_vectors = process_files(
+        benign_files, extractors, template, timing_policy,
+        desc="Benign datasets", use_progress=not args.no_progress, workers=args.workers
+    )
     benign_vectors = np.array(benign_vectors)
     print(f"  Extracted {len(benign_vectors)} benign vectors, dim={benign_vectors.shape[1]}")
 
-    # Extract vectors for all covert files
+    # Extract vectors for all covert files (parallel)
     covert_dir = Path(args.covert_dir)
     covert_files = sorted(covert_dir.glob("*.jsonl"))
     if not covert_files:
         raise ValueError(f"No JSONL files found in {args.covert_dir}")
-    print(f"Extracting feature vectors from {len(covert_files)} covert datasets...")
-    covert_vectors = []
-    for fpath in covert_files:
-        try:
-            vec = extract_feature_vector_from_file(fpath, extractors, template, timing_policy)
-            covert_vectors.append(vec)
-        except Exception as e:
-            print(f"Error processing {fpath}: {e}, skipping")
+    covert_vectors = process_files(
+        covert_files, extractors, template, timing_policy,
+        desc="Covert datasets", use_progress=not args.no_progress, workers=args.workers
+    )
     covert_vectors = np.array(covert_vectors)
     print(f"  Extracted {len(covert_vectors)} covert vectors, dim={covert_vectors.shape[1]}")
 
