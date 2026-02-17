@@ -38,3 +38,4 @@ class InteractionTrace:
     def __repr__(self) -> str:
         return f"InteractionTrace(num_events={len(self._events)})"
 
+
