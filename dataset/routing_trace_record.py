@@ -56,7 +56,8 @@ def _coerce_identifier(value: Any) -> Tuple[Any, ...]:
 
 def parse_routing_trace_line(obj: Dict[str, Any]) -> RoutingTraceRecord:
     role = str(_require(obj, "role")).strip().lower()
-    if role not in ("sender", "receiver"):
+    # Allow "user" for benign traces, plus the original "sender"/"receiver"
+    if role not in ("sender", "receiver", "user"):
         raise ValueError(f"Invalid role in routing trace: {role}")
 
     epoch = _require(obj, "epoch")
