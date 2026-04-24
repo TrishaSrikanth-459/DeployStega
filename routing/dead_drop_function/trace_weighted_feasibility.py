@@ -1,109 +1,75 @@
 """
-trace_weighted_feasibility.py  (FIXED)
-
-Pure URL-level feasibility region for DeployStega.
-
-This module enforces HARD behavioral constraints and answers ONLY the question:
-    "Is this exact URL behaviorally feasible for this role at this epoch?"
-
-CRITICAL MODEL GUARANTEES:
-- Feasibility is binary (allowed / forbidden)
-- Feasibility is URL-level, not artifact-level
-- No probabilities, weights, or ranking
-- No artifact-class selection
-- No identifier selection
-- No sampling logic
-- Epochs may legitimately have zero feasible URLs
-
-This module intentionally does NOT:
-- choose artifact classes
-- choose identifiers
-- bias selection
-- encode payloads
-- perform probabilistic modeling
-
-Any probabilistic behavior modeling MUST live outside the feasibility region.
+trace_weighted_feasibility.py – Concrete feasibility region using your generated traces.
 """
 
-from __future__ import annotations
+import json
+from pathlib import Path
+from collections import defaultdict
+from typing import List, Optional
+from routing.dead_drop_function.feasibility_region import FeasibilityRegion, Role
 
-from typing import Dict, Iterable, Literal, Set
 
-from .feasibility_region import FeasibilityRegion, Role
+class TraceBasedFeasibilityRegion(FeasibilityRegion):
+    """Feasibility region learned from actual trace files."""
 
+    def __init__(self, trace_dir: str):
+        self.trace_dir = Path(trace_dir)
+        # Structure: [epoch][artifact_class][role] -> set of URLs
+        self.url_observations = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+        self._load_traces()
 
-class URLAllowListFeasibilityRegion(FeasibilityRegion):
-    """
-    URL-level feasibility region based on an explicit allow-list.
+    def _load_traces(self):
+        """Load all trace files and record observed URLs."""
+        trace_files = sorted(self.trace_dir.glob("user_*.jsonl"))
+        print(f"Loading {len(trace_files)} trace files for feasibility...")
 
-    Feasibility is defined as membership in a precomputed allow-set:
-        (artifact_class, role, epoch) -> set(URL)
+        for fpath in trace_files:
+            with open(fpath, 'r') as f:
+                for line in f:
+                    try:
+                        event = json.loads(line)
+                        epoch = event.get('epoch', 0)
+                        artifact_class = event.get('artifact_class', '')
+                        url = event.get('url', '')
+                        role = event.get('role', 'user')  # 'user' in traces
 
-    If a URL is not explicitly listed for the given epoch and role,
-    it is infeasible by definition.
-    """
+                        # Map 'user' to both sender and receiver for feasibility
+                        if role == 'user':
+                            if artifact_class and url:
+                                self.url_observations[epoch][artifact_class]['sender'].add(url)
+                                self.url_observations[epoch][artifact_class]['receiver'].add(url)
+                        else:
+                            if artifact_class and url:
+                                self.url_observations[epoch][artifact_class][role].add(url)
+                    except Exception as e:
+                        print(f"Warning: could not parse line in {fpath}: {e}")
+                        continue
 
-    def __init__(
-        self,
-        *,
-        allowlist: Dict[
-            str,                    # artifact_class
-            Dict[
-                Role,               # sender | receiver
-                Dict[
-                    int,            # epoch bucket
-                    Iterable[str],  # exact GitHub URLs
-                ],
-            ],
-        ],
-    ):
-        self._allowlist: Dict[str, Dict[Role, Dict[int, Set[str]]]] = {}
+        print(f"Loaded feasibility data for {len(self.url_observations)} epochs")
 
-        # Normalize eagerly into sets for O(1) membership checks
-        for artifact_class, role_map in allowlist.items():
-            self._allowlist.setdefault(artifact_class, {})
-            for role, epoch_map in role_map.items():
-                self._allowlist[artifact_class].setdefault(role, {})
-                for epoch, urls in epoch_map.items():
-                    self._allowlist[artifact_class][role][epoch] = set(urls)
+    def is_url_allowed(self, *, epoch: int, artifact_class: str, role: Role, url: str) -> bool:
+        """A URL is allowed if it appeared in benign traces for this context."""
+        return url in self.url_observations[epoch][artifact_class].get(role, set())
 
-    # ============================================================
-    # Core Feasibility Query (REQUIRED INTERFACE)
-    # ============================================================
-
-    def is_url_allowed(
-        self,
-        *,
-        epoch: int,
-        artifact_class: str,
-        role: Role,
-        url: str,
-    ) -> bool:
+    def url_weight(self, *, epoch: int, artifact_class: str, role: Role, url: str) -> Optional[float]:
         """
-        Return True iff the exact URL is behaviorally feasible.
-
-        Rules:
-        - Missing artifact_class → infeasible
-        - Missing role → infeasible
-        - Missing epoch bucket → infeasible
-        - URL not explicitly listed → infeasible
-
-        This function is:
-        - deterministic
-        - side-effect free
-        - constant-time with respect to snapshot size
+        Return weight proportional to frequency (uniform if observed).
+        Since we don't track frequencies, return 1.0 if allowed, None otherwise.
         """
+        if self.is_url_allowed(epoch=epoch, artifact_class=artifact_class, role=role, url=url):
+            return 1.0
+        return None
 
-        role_map = self._allowlist.get(artifact_class)
-        if role_map is None:
-            return False
+    def get_allowed_urls(self, *, epoch: int, artifact_class: str, role: Role) -> List[str]:
+        """Get all URLs observed for this context."""
+        return list(self.url_observations[epoch][artifact_class].get(role, set()))
 
-        epoch_map = role_map.get(role)
-        if epoch_map is None:
-            return False
 
-        allowed_urls = epoch_map.get(epoch)
-        if allowed_urls is None:
-            return False
+class AllowAllFeasibilityRegion(FeasibilityRegion):
+    """Fallback that allows all URLs."""
 
-        return url in allowed_urls
+    def is_url_allowed(self, *, epoch: int, artifact_class: str, role: Role, url: str) -> bool:
+        return True
+
+    def url_weight(self, *, epoch: int, artifact_class: str, role: Role, url: str) -> Optional[float]:
+        return 1.0
