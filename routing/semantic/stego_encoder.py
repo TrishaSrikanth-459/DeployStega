@@ -5,33 +5,60 @@ import os
 import re
 import math
 from typing import Dict, Any, List, Tuple, Optional, Set
-from collections import defaultdict
-import random
+from collections import Counter
 from datetime import datetime
 import hashlib
-from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
+from urllib.parse import urlparse, urlunparse
 
-import openai
+from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
+from openai import AzureOpenAI
 
 # ============================================================
 # Configuration
 # ============================================================
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_ENDPOINT_RAW = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
+AZURE_OPENAI_DEPLOYMENT = (
+    os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    or os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+)
 
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY must be set")
 
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+def _normalize_azure_endpoint(endpoint: Optional[str]) -> Optional[str]:
+    if not endpoint:
+        return endpoint
+
+    parsed = urlparse(endpoint)
+    if not parsed.scheme or not parsed.netloc:
+        return endpoint.rstrip("/")
+
+    normalized = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    return normalized.rstrip("/")
+
+
+AZURE_OPENAI_ENDPOINT = _normalize_azure_endpoint(AZURE_OPENAI_ENDPOINT_RAW)
+
+if not AZURE_OPENAI_API_KEY:
+    raise RuntimeError("AZURE_OPENAI_API_KEY must be set")
+if not AZURE_OPENAI_ENDPOINT:
+    raise RuntimeError("AZURE_OPENAI_ENDPOINT must be set")
+if not AZURE_OPENAI_DEPLOYMENT:
+    raise RuntimeError("AZURE_OPENAI_DEPLOYMENT or AZURE_OPENAI_DEPLOYMENT_NAME must be set")
+
+client = AzureOpenAI(
+    api_key=AZURE_OPENAI_API_KEY,
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    api_version=AZURE_OPENAI_API_VERSION,
+)
 
 
 # ============================================================
-# BYTE-LEVEL Semantic Encoder (with quiet mode)
+# BYTE-LEVEL Semantic Encoder
 # ============================================================
 
 class ByteLevelSemanticEncoder:
-    # Map artifact classes to natural language descriptions
     ARTIFACT_TYPE_MAP = {
         "Issue": "GitHub issue",
         "PullRequest": "pull request",
@@ -40,15 +67,19 @@ class ByteLevelSemanticEncoder:
         "Milestone": "milestone",
         "IssueComment": "issue comment",
         "PullRequestComment": "pull request comment",
+        "PullRequestReviewComment": "pull request review comment",
         "CommitComment": "commit comment",
         "Repository": "repository",
         "Commit": "commit",
     }
 
-    # Artifact classes that are created as new comments (vs. editing the parent)
-    COMMENT_CLASSES = {"IssueComment", "PullRequestComment", "CommitComment"}
+    COMMENT_CLASSES = {
+        "IssueComment",
+        "PullRequestComment",
+        "PullRequestReviewComment",
+        "CommitComment",
+    }
 
-    # Cycle of artifact types to use for different chunks
     ARTIFACT_CYCLE = [
         ("IssueComment", True),
         ("PullRequestComment", True),
@@ -58,21 +89,26 @@ class ByteLevelSemanticEncoder:
         ("GitTag", False),
     ]
 
-    def __init__(self, bins_path: str = "token_binning_data/bins_k16.json", quiet: bool = False):
+    TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*")
+
+    def __init__(self, bins_path: str = None, quiet: bool = False):
         self.quiet = quiet
         self.bins = []
-        self.large_bins = []   # 256+ words
-        self.medium_bins = []  # 64-255 words
-        self.small_bins = []   # 16-63 words
-        self.tiny_bins = []    # 2-15 words
-        self._load_byte_bins(bins_path)
+        self.large_bins = []
+        self.medium_bins = []
+        self.small_bins = []
+        self.tiny_bins = []
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        fixed_bins_path = os.path.join(base_dir, "../../token_binning_data/bins_k16.json")
+        self._load_byte_bins(fixed_bins_path)
 
         if not self.quiet:
-            print(f"\n📊 BYTE-LEVEL ENCODING CAPACITY")
-            print(f"  Large bins (256+ words): {len(self.large_bins)} - Byte encoding (8 bits)")
-            print(f"  Medium bins (64-255): {len(self.medium_bins)} - 6-7 bit encoding")
-            print(f"  Small bins (16-63 words): {len(self.small_bins)} - 4-5 bit encoding")
-            print(f"  Tiny bins (2-15): {len(self.tiny_bins)} - 1-3 bit encoding")
+            print("\nBYTE-LEVEL ENCODING CAPACITY")
+            print(f"  Large bins (256+ words): {len(self.large_bins)}")
+            print(f"  Medium bins (64-255 words): {len(self.medium_bins)}")
+            print(f"  Small bins (16-63 words): {len(self.small_bins)}")
+            print(f"  Tiny bins (2-15 words): {len(self.tiny_bins)}")
 
         if len(self.large_bins) == 0 and len(self.medium_bins) == 0 and len(self.small_bins) < 2:
             raise RuntimeError(
@@ -80,112 +116,84 @@ class ByteLevelSemanticEncoder:
                 "(small/medium/large) to encode bytes as two nibbles."
             )
 
-        if not self.quiet:
-            if len(self.large_bins) == 0:
-                print("⚠ NOTE: No 256-word bins available (no direct 8-bit/choice encoding).")
-            if len(self.medium_bins) == 0:
-                print("⚠ NOTE: No 64-word bins available (no 6-7 bit/choice encoding).")
-            if len(self.small_bins) >= 2:
-                print("✅ Using SMALL bins to encode bytes as TWO NIBBLES (4 bits + 4 bits).")
-
     def _load_byte_bins(self, bins_path: str):
-        """Load bins."""
         if not self.quiet:
             print(f"Loading byte-level bins from {bins_path}...")
 
-        with open(bins_path, 'r', encoding="utf-8") as f:
+        with open(bins_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        bins_data = data['bins'] if 'bins' in data else data
+        bins_data = data["bins"] if "bins" in data else data
 
         for bin_id, tokens in enumerate(bins_data):
-            if len(tokens) >= 2:
-                clean_tokens = [str(tok).strip() for tok in tokens if str(tok).strip()]
-                size = len(clean_tokens)
+            if len(tokens) < 2:
+                continue
 
-                bin_info = {
-                    'bin_id': bin_id,
-                    'tokens': clean_tokens,
-                    'size': size,
-                    'capacity_bits': int(math.log2(size)) if size >= 2 else 1
-                }
+            clean_tokens = [str(tok).strip() for tok in tokens if str(tok).strip()]
+            size = len(clean_tokens)
 
-                self.bins.append(bin_info)
+            bin_info = {
+                "bin_id": bin_id,
+                "tokens": clean_tokens,
+                "size": size,
+                "capacity_bits": int(math.log2(size)) if size >= 2 else 1,
+            }
 
-                if size >= 256:
-                    self.large_bins.append(bin_info)
-                elif size >= 64:
-                    self.medium_bins.append(bin_info)
-                elif size >= 16:
-                    self.small_bins.append(bin_info)
-                else:
-                    self.tiny_bins.append(bin_info)
+            self.bins.append(bin_info)
+
+            if size >= 256:
+                self.large_bins.append(bin_info)
+            elif size >= 64:
+                self.medium_bins.append(bin_info)
+            elif size >= 16:
+                self.small_bins.append(bin_info)
+            else:
+                self.tiny_bins.append(bin_info)
 
         if not self.quiet:
-            print(f"✓ Loaded {len(self.bins)} byte-level bins")
+            print(f"Loaded {len(self.bins)} byte-level bins")
 
     def encode_message(self, message: str, context: Dict[str, Any]) -> tuple[list[Any], list[Any]]:
-        """
-        Encode message using the provided context.
-        Returns (stegotexts, positions_data)
-        """
         if not self.quiet:
-            print(f"\n🔐 BYTE-LEVEL ENCODING: '{message}'")
+            print(f"\nBYTE-LEVEL ENCODING: {message!r}")
 
-        # Extract context fields with defaults
-        artifact_class = context.get("artifact_class", "IssueComment")
-        parent_text = context.get("parent_text", "")
-        repo_files = context.get("repo_files", {})
-        repo_context = context.get("repo_context", "authentication system")
-        file_context = context.get("file_context", "")
-
-        message_bytes = message.encode('utf-8')
+        message_bytes = message.encode("utf-8")
         if not self.quiet:
             print(f"  Message bytes: {len(message_bytes)}")
             print(f"  Message bits: {len(message_bytes) * 8}")
 
         choices = self._create_byte_choices(message_bytes)
-        if not self.quiet:
-            print(f"  Created {len(choices)} encoding choices")
-
         if not choices:
             raise RuntimeError(
-                "Created 0 encoding choices. This means you have no bins capable of encoding "
-                "your message under the current rules. For nibble encoding you need at least "
-                "2 bins with size>=16 (small/medium/large)."
+                "Created 0 encoding choices. Need at least 2 bins with size>=16 "
+                "or 1 bin with size>=256."
             )
 
-        bits_per_choice = sum(c.get('bits', 0) for c in choices) / len(choices)
+        target_bits_per_chunk, max_choices_per_chunk = self._choose_chunking_params(choices)
         if not self.quiet:
-            print(f"  Average bits per choice: {bits_per_choice:.1f}")
+            print(f"  Chunk target bits: {target_bits_per_chunk}")
+            print(f"  Max choices per chunk: {max_choices_per_chunk}")
 
-        # Group choices into larger chunks (target 64 bits per chunk)
-        chunks: List[List[Dict]] = self._byte_chunking(choices, target_bits_per_chunk=64)
+        chunks = self._byte_chunking(
+            choices,
+            target_bits_per_chunk=target_bits_per_chunk,
+            max_choices_per_chunk=max_choices_per_chunk,
+        )
 
         stegotexts: List[str] = []
         positions_data: List[Dict[str, Any]] = []
-        used_words_global: Set[str] = set()      # track words already used to avoid repetition
-        previous_stegotexts: List[str] = []      # track full texts for repetition warnings
+        used_words_global: Set[str] = set()
+        previous_stegotexts: List[str] = []
 
         for chunk_idx, chunk_choices in enumerate(chunks):
             if not self.quiet:
                 print(f"\n  --- Chunk {chunk_idx + 1} ---")
                 print(f"  Encoding {len(chunk_choices)} choices")
 
-            # Rotate the parent text by taking a different sentence or portion
-            sentences = re.split(r'(?<=[.!?])\s+', parent_text) if parent_text else [""]
-            if sentences and sentences[0]:
-                parent_for_chunk = sentences[chunk_idx % len(sentences)]
-            else:
-                parent_for_chunk = parent_text
-
             chunk_text, chunk_positions = self._generate_byte_chunk(
                 context={
-                    "artifact_class": artifact_class,
-                    "parent_text": parent_for_chunk,
-                    "repo_files": repo_files,
-                    "repo_context": repo_context,
-                    "file_context": file_context,
+                    "artifact_class": context.get("artifact_class", "IssueComment"),
+                    "action": context.get("action", "view"),
                 },
                 chunk_idx=chunk_idx,
                 choices=chunk_choices,
@@ -193,73 +201,35 @@ class ByteLevelSemanticEncoder:
                 previous_stegotexts=previous_stegotexts,
             )
 
-            if not self.quiet:
-                print("\n    📝 STEGOTEXT (Chunk {0})".format(chunk_idx + 1))
-                if chunk_text:
-                    print("    " + chunk_text)
-                else:
-                    print("    (No text generated)")
-
             stegotexts.append(chunk_text)
             previous_stegotexts.append(chunk_text)
 
-            chunk_bits = sum(c.get('bits', 0) for c in chunk_choices)
-            positions_data.append({
-                'chunk_id': chunk_idx,
-                'choices': len(chunk_choices),
-                'encoded_bits': chunk_bits,
-                'positions': chunk_positions,
-                'text_preview': chunk_text[:160] + "..." if len(chunk_text) > 160 else chunk_text
-            })
+            chunk_bits = sum(c.get("bits", 0) for c in chunk_choices)
+            positions_data.append(
+                {
+                    "chunk_id": chunk_idx,
+                    "choices": len(chunk_choices),
+                    "encoded_bits": chunk_bits,
+                    "positions": chunk_positions,
+                    "text_preview": chunk_text[:160] + "..." if len(chunk_text) > 160 else chunk_text,
+                }
+            )
 
-            # Add the words that were actually used to the global set to avoid repetition
             for pos in chunk_positions:
-                word = pos.get('chosen_word')
+                word = pos.get("chosen_word")
                 if word:
                     used_words_global.add(word.lower())
-
-            if not self.quiet:
-                print(f"\n    🔎 STEGOCHUNK MAP (Chunk {chunk_idx + 1})")
-                if not chunk_text:
-                    print("    (No text generated)")
-                else:
-                    pos_by_id = {p.get("choice_id"): p for p in chunk_positions}
-                    for ch in chunk_choices:
-                        cid = ch.get("choice_id")
-                        enc_type = ch.get("encoding_type", "unknown")
-                        bits = ch.get("bits", 0)
-                        target = ch.get("target_index", None)
-
-                        if cid in pos_by_id:
-                            p = pos_by_id[cid]
-                            print(
-                                f"    choice_id={cid:>4} | {enc_type:<11} {bits:>2}b | "
-                                f"target_index={str(target):<4} | chosen_index={str(p.get('chosen_index')):<4} | "
-                                f"word='{p.get('chosen_word')}'"
-                            )
-                        else:
-                            print(
-                                f"    choice_id={cid:>4} | {enc_type:<11} {bits:>2}b | "
-                                f"target_index={str(target):<4} | NOT ENCODED"
-                            )
-                print("")
 
         return stegotexts, positions_data
 
     def _create_byte_choices(self, message_bytes: bytes) -> List[Dict]:
-        """Create choices."""
         choices: List[Dict] = []
 
         for i, byte_value in enumerate(message_bytes):
             byte_choice = self._encode_byte(byte_value, i)
             if byte_choice is None:
                 raise RuntimeError(
-                    f"Byte {i} (0x{byte_value:02x}) could not be encoded with available bins.\n"
-                    f"Have: large={len(self.large_bins)}, medium={len(self.medium_bins)}, small={len(self.small_bins)}, tiny={len(self.tiny_bins)}.\n"
-                    f"To encode bytes you need either:\n"
-                    f"  - 1 large bin (>=256) for direct byte encoding, OR\n"
-                    f"  - 2 bins with size>=16 (medium/small) for nibble encoding.\n"
-                    f"No synthetic fallback is enabled."
+                    f"Byte {i} (0x{byte_value:02x}) could not be encoded with available bins."
                 )
 
             if isinstance(byte_choice, list):
@@ -270,107 +240,112 @@ class ByteLevelSemanticEncoder:
         for idx, ch in enumerate(choices):
             ch["choice_id"] = idx
 
-        encoding_stats = defaultdict(int)
-        for choice in choices:
-            encoding_stats[choice.get('encoding_type', 'unknown')] += 1
-
-        if not self.quiet:
-            print("  Encoding distribution:")
-            for enc_type, count in sorted(encoding_stats.items()):
-                bits = {'byte': 8, 'high_nibble': 4, 'low_nibble': 4}.get(enc_type, 0)
-                print(f"    {enc_type}: {count} choices ({bits} bits each)")
-
         return choices
 
     def _encode_byte(self, byte_value: int, byte_index: int) -> Optional[Dict | List[Dict]]:
-        """Encode a byte using ONLY real bins (no synthetic fallback)."""
-
-        # 1) Direct byte encoding with a large bin (>=256)
         if self.large_bins:
             cluster = self.large_bins[byte_index % len(self.large_bins)]
             return {
-                'byte_value': byte_value,
-                'cluster_id': cluster['bin_id'],
-                'cluster_words': cluster['tokens'],
-                'target_index': byte_value % len(cluster['tokens']),
-                'bits': 8,
-                'encoding_type': 'byte',
-                'byte_index': byte_index
+                "byte_value": byte_value,
+                "cluster_id": cluster["bin_id"],
+                "cluster_words": cluster["tokens"],
+                "target_index": byte_value % len(cluster["tokens"]),
+                "bits": 8,
+                "encoding_type": "byte",
+                "byte_index": byte_index,
             }
 
-        # 2) Nibble encoding with medium bins (>=64)
         if len(self.medium_bins) >= 2:
             high_nibble = (byte_value >> 4) & 0x0F
             low_nibble = byte_value & 0x0F
-
             high_bin = self.medium_bins[byte_index % len(self.medium_bins)]
             low_bin = self.medium_bins[(byte_index + 1) % len(self.medium_bins)]
 
-            if len(high_bin['tokens']) >= 16 and len(low_bin['tokens']) >= 16:
+            if len(high_bin["tokens"]) >= 16 and len(low_bin["tokens"]) >= 16:
                 return [
                     {
-                        'nibble_value': high_nibble,
-                        'cluster_id': high_bin['bin_id'],
-                        'cluster_words': high_bin['tokens'],
-                        'target_index': high_nibble,
-                        'bits': 4,
-                        'encoding_type': 'high_nibble',
-                        'byte_index': byte_index
+                        "nibble_value": high_nibble,
+                        "cluster_id": high_bin["bin_id"],
+                        "cluster_words": high_bin["tokens"],
+                        "target_index": high_nibble,
+                        "bits": 4,
+                        "encoding_type": "high_nibble",
+                        "byte_index": byte_index,
                     },
                     {
-                        'nibble_value': low_nibble,
-                        'cluster_id': low_bin['bin_id'],
-                        'cluster_words': low_bin['tokens'],
-                        'target_index': low_nibble,
-                        'bits': 4,
-                        'encoding_type': 'low_nibble',
-                        'byte_index': byte_index
-                    }
+                        "nibble_value": low_nibble,
+                        "cluster_id": low_bin["bin_id"],
+                        "cluster_words": low_bin["tokens"],
+                        "target_index": low_nibble,
+                        "bits": 4,
+                        "encoding_type": "low_nibble",
+                        "byte_index": byte_index,
+                    },
                 ]
 
-        # 3) Nibble encoding with SMALL bins (>=16)
         if len(self.small_bins) >= 2:
             high_nibble = (byte_value >> 4) & 0x0F
             low_nibble = byte_value & 0x0F
-
             high_bin = self.small_bins[byte_index % len(self.small_bins)]
             low_bin = self.small_bins[(byte_index + 1) % len(self.small_bins)]
 
-            if len(high_bin['tokens']) >= 16 and len(low_bin['tokens']) >= 16:
+            if len(high_bin["tokens"]) >= 16 and len(low_bin["tokens"]) >= 16:
                 return [
                     {
-                        'nibble_value': high_nibble,
-                        'cluster_id': high_bin['bin_id'],
-                        'cluster_words': high_bin['tokens'],
-                        'target_index': high_nibble,
-                        'bits': 4,
-                        'encoding_type': 'high_nibble',
-                        'byte_index': byte_index
+                        "nibble_value": high_nibble,
+                        "cluster_id": high_bin["bin_id"],
+                        "cluster_words": high_bin["tokens"],
+                        "target_index": high_nibble,
+                        "bits": 4,
+                        "encoding_type": "high_nibble",
+                        "byte_index": byte_index,
                     },
                     {
-                        'nibble_value': low_nibble,
-                        'cluster_id': low_bin['bin_id'],
-                        'cluster_words': low_bin['tokens'],
-                        'target_index': low_nibble,
-                        'bits': 4,
-                        'encoding_type': 'low_nibble',
-                        'byte_index': byte_index
-                    }
+                        "nibble_value": low_nibble,
+                        "cluster_id": low_bin["bin_id"],
+                        "cluster_words": low_bin["tokens"],
+                        "target_index": low_nibble,
+                        "bits": 4,
+                        "encoding_type": "low_nibble",
+                        "byte_index": byte_index,
+                    },
                 ]
 
         return None
 
-    def _byte_chunking(self, choices: List[Dict], target_bits_per_chunk: int = 64) -> List[List[Dict]]:
-        """Group choices into chunks of at least target_bits_per_chunk bits."""
+    def _choose_chunking_params(self, choices: List[Dict]) -> Tuple[int, int]:
+        if not choices:
+            return 64, 16
+
+        avg_bits = sum(choice.get("bits", 0) for choice in choices) / len(choices)
+        all_nibbles = all(choice.get("bits", 0) <= 4 for choice in choices)
+
+        if all_nibbles or avg_bits <= 4.1:
+            return 96, 24
+
+        return 128, 16
+
+    def _byte_chunking(
+        self,
+        choices: List[Dict],
+        target_bits_per_chunk: int = 96,
+        max_choices_per_chunk: Optional[int] = None,
+    ) -> List[List[Dict]]:
         chunks: List[List[Dict]] = []
         current_chunk: List[Dict] = []
         current_bits = 0
 
         for choice in choices:
             current_chunk.append(choice)
-            current_bits += choice.get('bits', 1)
+            current_bits += choice.get("bits", 1)
 
-            if current_bits >= target_bits_per_chunk:
+            hit_bit_target = current_bits >= target_bits_per_chunk
+            hit_choice_target = (
+                max_choices_per_chunk is not None
+                and len(current_chunk) >= max_choices_per_chunk
+            )
+
+            if hit_bit_target or hit_choice_target:
                 chunks.append(current_chunk)
                 current_chunk = []
                 current_bits = 0
@@ -380,283 +355,483 @@ class ByteLevelSemanticEncoder:
 
         return chunks
 
-    def _generate_byte_chunk(self, context: Dict[str, Any],
-                             chunk_idx: int,
-                             choices: List[Dict],
-                             used_words_global: Set[str],
-                             previous_stegotexts: List[str]) -> Tuple[str, List[Dict]]:
-        """Generate natural text for encoding, with variety and avoiding repetition."""
-        # Cycle through artifact types based on chunk index
-        artifact_class, is_comment = self.ARTIFACT_CYCLE[chunk_idx % len(self.ARTIFACT_CYCLE)]
-        artifact_type_desc = self.ARTIFACT_TYPE_MAP.get(artifact_class, "GitHub discussion")
+    def _tokenize_for_matching(self, text: str) -> List[str]:
+        return [t.lower() for t in self.TOKEN_RE.findall(text)]
 
-        parent_text = context.get("parent_text", "")
-        repo_files = context.get("repo_files", {})
-        repo_context = context.get("repo_context", "authentication system")
+    def _required_words_in_order(self, tokens: List[str], required_words: List[str]) -> bool:
+        idx = -1
+        for word in required_words:
+            word_lower = word.lower()
+            try:
+                idx = tokens.index(word_lower, idx + 1)
+            except ValueError:
+                return False
+        return True
 
-        prompt = self._build_byte_prompt(
-            artifact_type=artifact_type_desc,
-            is_comment=is_comment,
-            parent_text=parent_text,
-            repo_files=repo_files,
-            repo_context=repo_context,
-            choices=choices,
-            used_words_global=used_words_global,
-            previous_stegotexts=previous_stegotexts,
-        )
+    def _get_required_words(self, choices: List[Dict]) -> List[str]:
+        required_words: List[str] = []
+        for choice in choices:
+            cluster_words = choice.get("cluster_words", [])
+            target_index = choice.get("target_index", 0)
+            if cluster_words and 0 <= target_index < len(cluster_words):
+                required_words.append(cluster_words[target_index])
+        return required_words
+
+    def _is_code_like_token(self, token: str) -> bool:
+        if "." in token or "_" in token:
+            return True
+        if re.search(r"[a-z][A-Z]", token):
+            return True
+        if re.search(r"[A-Z].*[a-z].*[A-Z]", token):
+            return True
+        return False
+
+    def _format_required_word_for_prompt(self, word: str) -> str:
+        if self._is_code_like_token(word):
+            return f"`{word}`"
+        return word
+
+    def _extract_json_object_from_text(self, text: str) -> Optional[Dict[str, Any]]:
+        cleaned = re.sub(r"```json\s*", "", text)
+        cleaned = re.sub(r"```\s*", "", cleaned)
+        cleaned = cleaned.strip()
+
+        candidates = [cleaned]
+
+        start_obj = cleaned.find("{")
+        end_obj = cleaned.rfind("}")
+        if start_obj != -1 and end_obj != -1 and end_obj >= start_obj:
+            candidates.append(cleaned[start_obj:end_obj + 1])
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+
+        return None
+
+    def _llm_validate_surface_naturalness(
+        self,
+        text: str,
+        artifact_type_desc: str,
+        required_words: List[str],
+    ) -> Tuple[bool, str]:
+        required_preview = ", ".join(self._format_required_word_for_prompt(w) for w in required_words[:24])
+
+        prompt = f"""You are validating a short GitHub developer note.
+
+Decide whether this note is natural enough to keep.
+
+Important rules:
+- Required tokens may include code identifiers, acronyms, product names, proper nouns, library names, hyphenated terms, and unusual technical strings.
+- Reject the note if a clearly ordinary English word is unnecessarily capitalized in the middle of a sentence.
+- Do NOT reject the note for mid-sentence capitalization when the token could reasonably be a proper noun, acronym, product name, library name, code identifier, or a required technical token.
+- Do NOT reject the note just because a token is backticked, code-like, acronym-like, or technically unusual.
+- Reject only if the prose itself is clearly awkward or the capitalization/wording is clearly unnatural for a short GitHub note.
+
+Artifact type:
+{artifact_type_desc}
+
+Required tokens that may legitimately look unusual:
+{required_preview}
+
+Return ONLY valid JSON in exactly this format:
+{{"ok": true, "reason": "brief reason"}}
+
+Text:
+{text}
+"""
 
         try:
             response = client.chat.completions.create(
-                model=OPENAI_MODEL,
+                model=AZURE_OPENAI_DEPLOYMENT,
                 messages=[
                     ChatCompletionSystemMessageParam(
                         role="system",
-                        content="You are a technical writer on GitHub. Write naturally and professionally, using proper English casing. Words from the provided list may be capitalized in the list, but you should lowercase them when they appear mid‑sentence unless they are proper nouns or acronyms that should remain uppercase. For example, 'Blueprint' should become 'blueprint' in the middle of a sentence."
+                        content=(
+                            "You are a careful validator for short GitHub developer prose. "
+                            "Be permissive with technical tokens, but treat gratuitous capitalization of ordinary words "
+                            "in the middle of a sentence as a real problem. Return only strict JSON."
+                        ),
                     ),
-                    ChatCompletionUserMessageParam(
-                        role="user",
-                        content=prompt
-                    )
+                    ChatCompletionUserMessageParam(role="user", content=prompt),
                 ],
-                temperature=0.8,
-                max_tokens=300,
-                top_p=0.9
             )
 
-            text = response.choices[0].message.content.strip()
-            text = re.sub(r'\s+', ' ', text)
+            response_choices = getattr(response, "choices", None)
+            if not response_choices:
+                return True, "surface validator unavailable"
 
-            if not text.endswith(('.', '!', '?')):
-                text += '.'
+            first_choice = response_choices[0]
+            msg = getattr(first_choice, "message", None)
+            if msg is None:
+                return True, "surface validator unavailable"
 
-            if not self.quiet:
-                print(f"    Generated {len(text.split())} words")
+            raw = msg.content or ""
+            if isinstance(raw, list):
+                parts: List[str] = []
+                for item in raw:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        parts.append(item.get("text", ""))
+                    elif hasattr(item, "type") and getattr(item, "type", None) == "text":
+                        parts.append(getattr(item, "text", ""))
+                    elif isinstance(item, str):
+                        parts.append(item)
+                raw = "".join(parts)
 
+            raw = raw.strip()
+            parsed = self._extract_json_object_from_text(raw)
+            if not parsed:
+                return True, "surface validator parse fallback"
+
+            ok = parsed.get("ok")
+            reason = str(parsed.get("reason", "")).strip()
+
+            if isinstance(ok, bool):
+                return ok, reason or ("surface accepted" if ok else "surface rejected")
+
+            return True, "surface validator parse fallback"
+        except Exception:
+            return True, "surface validator unavailable"
+
+    def _has_adjacent_duplicate_token_in_sentence(self, text: str) -> bool:
+        sentence_parts = re.split(r"(?<=[.!?])\s+", text.strip())
+        for sentence in sentence_parts:
+            tokens = self._tokenize_for_matching(sentence)
+            if any(a == b for a, b in zip(tokens, tokens[1:])):
+                return True
+        return False
+
+    def _generate_byte_chunk(
+        self,
+        context: Dict[str, Any],
+        chunk_idx: int,
+        choices: List[Dict],
+        used_words_global: Set[str],
+        previous_stegotexts: List[str],
+    ) -> Tuple[str, List[Dict]]:
+        artifact_class = context.get("artifact_class") or self.ARTIFACT_CYCLE[chunk_idx % len(self.ARTIFACT_CYCLE)][0]
+        is_comment = artifact_class in self.COMMENT_CLASSES
+        artifact_type_desc = self.ARTIFACT_TYPE_MAP.get(artifact_class, "GitHub discussion")
+        action = context.get("action", "view")
+
+        required_words = self._get_required_words(choices)
+
+        prompt = self._build_byte_prompt(
+            artifact_type=artifact_type_desc,
+            action=action,
+            is_comment=is_comment,
+            required_words=required_words,
+            previous_stegotexts=previous_stegotexts,
+        )
+
+        def _call_model(prompt_text: str) -> str:
+            response = client.chat.completions.create(
+                model=AZURE_OPENAI_DEPLOYMENT,
+                messages=[
+                    ChatCompletionSystemMessageParam(
+                        role="system",
+                        content=(
+                            "You are a GitHub user writing a short, natural developer note. "
+                            "Write concise, human-sounding prose with one coherent technical theme. "
+                            "Keep the note brief and avoid verbosity, laundry lists, and abrupt topic changes. "
+                            "Use standard sentence case. Do not introduce capitalized ordinary words in the middle "
+                            "of a sentence. Do not repeat the same word consecutively within a sentence. "
+                            "Some required tokens may be code identifiers such as method names, dotted paths, "
+                            "or identifiers with underscores. When a required token looks like code, preserve it "
+                            "character-for-character exactly, including uppercase/lowercase letters, periods, and underscores. "
+                            "For code-like required tokens, inline backticks are allowed and preferred. "
+                            "Do not rewrite, normalize, split, or paraphrase required tokens."
+                        ),
+                    ),
+                    ChatCompletionUserMessageParam(role="user", content=prompt_text),
+                ],
+            )
+
+            response_choices = getattr(response, "choices", None)
+            if not response_choices:
+                raise RuntimeError(f"Azure OpenAI returned no choices: {response!r}")
+
+            first_choice = response_choices[0]
+            msg = getattr(first_choice, "message", None)
+            if msg is None:
+                raise RuntimeError(f"Azure OpenAI returned a choice without a message: {response!r}")
+
+            text = msg.content or ""
+            if isinstance(text, list):
+                parts: List[str] = []
+                for item in text:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        parts.append(item.get("text", ""))
+                    elif hasattr(item, "type") and getattr(item, "type", None) == "text":
+                        parts.append(getattr(item, "text", ""))
+                    elif isinstance(item, str):
+                        parts.append(item)
+                text = "".join(parts)
+
+            text = text.strip()
+            if not text:
+                raise RuntimeError(f"Azure OpenAI returned empty content: {response!r}")
+
+            return text
+
+        def _normalize_text(t: str) -> str:
+            t = re.sub(r"\s+", " ", t).strip()
+            if not t.endswith((".", "!", "?")):
+                t += "."
+            return t
+
+        def _missing_required_words(t: str) -> List[str]:
+            tokens = self._tokenize_for_matching(t)
+            token_counts = Counter(tokens)
+            missing: List[str] = []
+            for required in required_words:
+                key = required.lower()
+                if token_counts.get(key, 0) <= 0:
+                    missing.append(required)
+                else:
+                    token_counts[key] -= 1
+            return missing
+
+        text = _normalize_text(_call_model(prompt))
+        positions = self._extract_byte_positions(text, choices)
+        tokens = self._tokenize_for_matching(text)
+        missing = _missing_required_words(text)
+        order_ok = self._required_words_in_order(tokens, required_words)
+        has_dup = self._has_adjacent_duplicate_token_in_sentence(text)
+
+        surface_ok = True
+        surface_reason = ""
+        if not missing and order_ok and len(positions) == len(choices) and not has_dup:
+            surface_ok, surface_reason = self._llm_validate_surface_naturalness(
+                text=text,
+                artifact_type_desc=artifact_type_desc,
+                required_words=required_words,
+            )
+
+        max_retries = 6
+        attempts = 0
+        retry_styles = [
+            "Write one coherent developer note with a single technical theme.",
+            "Write a compact GitHub-style note that reads naturally.",
+            "Use 3-5 fluent sentences and keep the ideas connected.",
+            "Write a short technical update with clear cause-and-effect between sentences.",
+        ]
+
+        while (
+            missing
+            or not order_ok
+            or len(positions) != len(choices)
+            or has_dup
+            or not surface_ok
+        ) and attempts < max_retries:
+            style_hint = retry_styles[attempts % len(retry_styles)]
+
+            issues: List[str] = []
+            if missing:
+                issues.append(
+                    "Missing required words: "
+                    + ", ".join(self._format_required_word_for_prompt(word) for word in missing)
+                )
+            if not order_ok:
+                issues.append("Required words were not in the exact required order.")
+            if len(positions) != len(choices):
+                issues.append(f"Matched positions were {len(positions)} of {len(choices)}.")
+            if has_dup:
+                issues.append("There was a duplicate consecutive word inside a sentence.")
+            if not surface_ok:
+                issues.append(
+                    "A secondary LLM validator judged the note as not natural enough"
+                    + (f": {surface_reason}" if surface_reason else ".")
+                )
+
+            rewrite_prompt = (
+                prompt
+                + "\n\nREWRITE REQUIRED: Your previous response did not satisfy constraints."
+                + "\n"
+                + "\n".join(issues)
+                + "\nYou must keep the REQUIRED WORDS in the exact order given. Do not reorder or skip any word."
+                + "\nCode-like required tokens must be preserved exactly character-for-character."
+                + "\nKeep the result concise, natural, and focused on one coherent technical theme."
+                + "\nDo not use bullet points, checklist formatting, or fragment lists."
+                + "\nUse normal sentence case unless a required token is naturally capitalized."
+                + "\nDo not repeat the same word consecutively inside a sentence."
+                + "\n"
+                + style_hint
+                + "\nReturn only the rewritten text."
+            )
+
+            text = _normalize_text(_call_model(rewrite_prompt))
             positions = self._extract_byte_positions(text, choices)
+            tokens = self._tokenize_for_matching(text)
+            missing = _missing_required_words(text)
+            order_ok = self._required_words_in_order(tokens, required_words)
+            has_dup = self._has_adjacent_duplicate_token_in_sentence(text)
 
-            encoded = len(positions)
-            total = len(choices)
-            success = encoded / total * 100 if total > 0 else 0
+            surface_ok = True
+            surface_reason = ""
+            if not missing and order_ok and len(positions) == len(choices) and not has_dup:
+                surface_ok, surface_reason = self._llm_validate_surface_naturalness(
+                    text=text,
+                    artifact_type_desc=artifact_type_desc,
+                    required_words=required_words,
+                )
 
-            if not self.quiet:
-                print(f"    Encoded {encoded}/{total} choices ({success:.0f}%)")
+            attempts += 1
 
-            return text, positions
+        if missing or not order_ok or len(positions) != len(choices) or has_dup or not surface_ok:
+            problems: List[str] = []
+            if missing:
+                problems.append(f"Missing: {', '.join(missing)}")
+            if not order_ok:
+                problems.append("order mismatch")
+            if len(positions) != len(choices):
+                problems.append(f"positions={len(positions)}/{len(choices)}")
+            if has_dup:
+                problems.append("duplicate consecutive word")
+            if not surface_ok:
+                problems.append(f"surface validation: {surface_reason or 'not natural enough'}")
+            raise RuntimeError(
+                f"Failed to encode all required words after {max_retries} retries. "
+                + "; ".join(problems)
+            )
 
-        except Exception as e:
-            if not self.quiet:
-                print(f"    ⚠ Error: {e}")
-            return "", []
+        return text, positions
 
-    def _build_byte_prompt(self, artifact_type: str, is_comment: bool,
-                           parent_text: str, repo_files: Dict[str, str],
-                           repo_context: str, choices: List[Dict],
-                           used_words_global: Set[str],
-                           previous_stegotexts: List[str]) -> str:
-        """
-        Build a prompt that asks the LLM to generate realistic content.
-        - Suggests up to 10 sample words from bins, excluding already used words.
-        - Allows only case changes (lowercase/uppercase) for natural flow – no other modifications.
-        - Explicitly encourages lowercasing bin words mid‑sentence.
-        - Explicitly allows mentioning existing files, forbids inventing new ones.
-        - Uses a generic repository summary (no explicit file list) to avoid bias.
-        """
-        # Gather all bin words from all choices (for variety)
-        all_bin_words = []
-        for choice in choices:
-            cluster_words = choice.get('cluster_words', [])
-            all_bin_words.extend(cluster_words)
-
-        # Remove duplicates
-        unique_candidates = list(dict.fromkeys(all_bin_words))
-        random.shuffle(unique_candidates)
-
-        sample_words: List[str] = []
-        for word in unique_candidates:
-            word_lower = word.lower()
-            if word_lower not in used_words_global and word not in sample_words:
-                sample_words.append(word)
-                if len(sample_words) >= 10:
-                    break
-
-        if not sample_words:
-            # Fallback: take any words (should rarely happen)
-            sample_words = unique_candidates[:6]
-
-        display_words = ', '.join(sample_words)
-
-        # Generic repository summary (no file list – the LLM already knows the repo via system prompt)
-        repo_summary = "The repository contains source code and documentation relevant to the project.\n"
-
-        # Truncate parent text if too long
-        if len(parent_text) > 300:
-            parent_preview = parent_text[:300] + "..."
-        else:
-            parent_preview = parent_text
-
-        # Build a list of forbidden words (recently used)
-        forbidden_list = list(used_words_global)[-15:] if used_words_global else []
-        forbidden_str = ", ".join(forbidden_list) if forbidden_list else "none yet"
-
-        # Repetition warning with examples
+    def _build_byte_prompt(
+        self,
+        artifact_type: str,
+        action: str,
+        is_comment: bool,
+        required_words: List[str],
+        previous_stegotexts: List[str],
+    ) -> str:
         repetition_warning = ""
         if previous_stegotexts:
             repetition_warning = (
-                f"\nIMPORTANT: The following comments have already been posted. "
-                f"Do NOT use the same words, phrases, or ideas. Be completely fresh.\n"
-                f"Words already used (do not reuse): {forbidden_str}\n"
-                f"Previous comments:\n"
+                "\nIMPORTANT: Previous generated texts are shown below. "
+                "Avoid reusing distinctive phrases, sentence shapes, or the same overall idea. "
+                "It is fine to reuse ordinary technical words when needed.\n"
+                "Previous texts:\n"
             )
             for i, prev in enumerate(previous_stegotexts[-3:]):
-                repetition_warning += f"  {i+1}. {prev[:100]}...\n"
+                repetition_warning += f"  {i + 1}. {prev[:100]}...\n"
             repetition_warning += "\n"
 
-        # Instruction to incorporate sample words – strongly encourage lowercasing
-        incorporate_instruction = (
-            f"As you write, naturally incorporate some of these words where they fit best: {display_words}\n"
-            "You may change the case of the words to fit grammatically (e.g., lowercase a capitalized word in the middle of a sentence). "
-            "In fact, you should **lowercase** them unless they are proper nouns or acronyms that should remain uppercase. "
-            "For example, if the word is 'Blueprint', you can write 'blueprint'.\n"
-            "You may mention specific files or artifacts that exist in the repository, but do NOT invent any files or content that do not exist."
+        required_order_list = "\n".join(
+            [f"{i + 1}. {self._format_required_word_for_prompt(w)}" for i, w in enumerate(required_words)]
         )
 
-        if is_comment:
-            if parent_preview:
-                prompt = f"""{repo_summary}{repetition_warning}Write a new {artifact_type} replying to the following content:
+        sentence_min = 3
+        sentence_max = 5 if len(required_words) <= 16 else 6
 
---- Original {artifact_type} ---
-{parent_preview}
----
+        code_like_words = [w for w in required_words if self._is_code_like_token(w)]
+        code_hint = ""
+        if code_like_words:
+            formatted_code_words = ", ".join(f"`{w}`" for w in code_like_words[:8])
+            code_hint = (
+                "\nSome REQUIRED WORDS are code-like tokens. "
+                "Preserve those code-like tokens exactly character-for-character. "
+                "Inline backticks are allowed and preferred for code-like tokens. "
+                "Do not use fenced code blocks.\n"
+                f"Code-like examples in this chunk: {formatted_code_words}"
+            )
 
-Be concise and natural (3-4 sentences). The reply should be about {repo_context}.
+        structure_hint = ""
+        if len(required_words) >= 16:
+            structure_hint = (
+                "\nKeep the note compact and coherent around one technical theme. "
+                "Avoid making it read like a laundry list of unrelated tools or APIs."
+            )
 
-{incorporate_instruction}
+        incorporate_instruction = (
+            "REQUIRED WORDS (must all appear at least once, as standalone tokens, case-insensitive) "
+            "IN THIS EXACT ORDER:\n"
+            f"{required_order_list}\n"
+            "For ordinary words, use normal sentence case and do not capitalize them in the middle "
+            "of a sentence unless grammar truly requires it. "
+            "For code-like tokens, preserve the exact spelling, punctuation, and casing.\n"
+            "Do not split required tokens. Inline code is allowed for code-like tokens. "
+            "Do not use fenced code blocks."
+        )
 
-CRITICAL: Do NOT repeat any words from the forbidden list. Use fresh vocabulary.
-
-Write the reply:"""
-            else:
-                prompt = f"""{repo_summary}{repetition_warning}Write a new {artifact_type} about {repo_context}.
-
-Be concise and natural (3-4 sentences).
-
-{incorporate_instruction}
-
-CRITICAL: Do NOT repeat any words from the forbidden list. Use fresh vocabulary.
-
-Write naturally:"""
+        if action == "comment" or is_comment:
+            opening = f"{repetition_warning}Write a new short {artifact_type} reply about software development."
+        elif action == "edit":
+            opening = f"{repetition_warning}Write a short {artifact_type} update about software development."
         else:
-            if parent_preview:
-                prompt = f"""{repo_summary}{repetition_warning}You need to rewrite the following {artifact_type}:
+            opening = f"{repetition_warning}Write a short note a developer might make while reviewing a {artifact_type} about software development."
 
---- Original {artifact_type} ---
-{parent_preview}
----
+        return f"""{opening}
 
-The revised version should be about {repo_context} and must naturally incorporate some of these words: {display_words}
-
-Important guidelines:
-- Keep the same general meaning and tone.
-- Do not just add the words artificially; blend them in so the text reads naturally.
-- You may change the case of the words to fit grammatically (e.g., lowercase a capitalized word mid‑sentence). In fact, you should **lowercase** them unless they are proper nouns or acronyms.
-- You may mention specific files or artifacts that exist in the repository, but do NOT invent any files or content that do not exist.
-- CRITICAL: Do NOT repeat any words from the forbidden list. Use entirely fresh language.
-- Output only the rewritten {artifact_type} (no extra commentary)."""
-            else:
-                prompt = f"""{repo_summary}{repetition_warning}Write a {artifact_type} about {repo_context}.
-
-Be concise and natural (3-4 sentences).
+Write {sentence_min}-{sentence_max} concise sentences. Keep the overall output short, human, and natural. Use one coherent technical theme rather than many disconnected topics.{structure_hint}{code_hint}
 
 {incorporate_instruction}
 
-CRITICAL: Do NOT repeat any words from the forbidden list. Use fresh vocabulary.
+Additional style rules:
+- Use standard sentence case.
+- Do not introduce capitalized ordinary words in the middle of a sentence.
+- Do not repeat the same word consecutively inside a sentence.
+- Keep the prose concise and non-verbose.
+- Avoid bullet points, checklist formatting, and semicolon-separated lists.
 
-Write the {artifact_type}:"""
-
-        return prompt
+Return only the text:"""
 
     def _extract_byte_positions(self, text: str, choices: List[Dict]) -> List[Dict]:
-        """Extract which words were chosen."""
         positions: List[Dict] = []
-        text_lower = text.lower()
-        words = text.split()
+        tokens = self._tokenize_for_matching(text)
+        search_start = 0
 
         for choice in choices:
-            found_word = None
-            found_index = None
+            cluster_words = choice.get("cluster_words", [])
+            target_index = choice.get("target_index", 0)
 
-            cluster_words = choice.get('cluster_words', [])
-            for idx, word in enumerate(cluster_words):
-                if re.search(rf'\b{re.escape(word.lower())}\b', text_lower):
-                    found_word = word
-                    found_index = idx
+            if not cluster_words or target_index is None or target_index >= len(cluster_words):
+                continue
+
+            target_word = cluster_words[target_index]
+            key = target_word.lower()
+
+            found_position = None
+            for idx in range(search_start, len(tokens)):
+                if tokens[idx] == key:
+                    found_position = idx
+                    search_start = idx + 1
                     break
 
-            if found_word:
-                for w in words:
-                    if w.lower().strip('.,!?;:') == found_word.lower():
-                        positions.append({
-                            'choice_id': choice.get('choice_id'),
-                            'chosen_word': found_word,
-                            'chosen_index': found_index,
-                            'target_index': choice.get('target_index', 0),
-                            'encoding_type': choice.get('encoding_type', 'unknown'),
-                            'bits': choice.get('bits', 0)
-                        })
-                        break
+            if found_position is None:
+                continue
+
+            positions.append(
+                {
+                    "choice_id": choice.get("choice_id"),
+                    "byte_index": choice.get("byte_index"),
+                    "chosen_word": target_word,
+                    "chosen_index": target_index,
+                    "target_index": target_index,
+                    "encoding_type": choice.get("encoding_type", "unknown"),
+                    "bits": choice.get("bits", 0),
+                    "token_position": found_position,
+                }
+            )
 
         return positions
 
 
-# ============================================================
-# Byte-Level Main Encoder (wrapper for routing system)
-# ============================================================
-
 class ByteLevelStegoEncoder:
-    def __init__(self, bins_path: str = "token_binning_data/bins_k16.json", quiet: bool = False):
+    def __init__(self, bins_path: str = None, quiet: bool = False):
         self.encoder = ByteLevelSemanticEncoder(bins_path, quiet=quiet)
 
-    def encode(self, message: str, context: Dict[str, Any],
-               positions_filename: Optional[str] = None) -> List[str]:
-        """
-        Encode a secret message into stegotext chunks.
-
-        context must contain:
-          - artifact_class : str
-          - parent_text    : str (original content of the artifact being used)
-          - repo_files     : Dict[str, str] (optional, from grounding index)
-          - repo_context   : str (optional)
-          - file_context   : str (optional)
-        """
-        if not self.encoder.quiet:
-            print(f"\n📤 BYTE-LEVEL ENCODING: '{message}'")
-            print(f"  Length: {len(message)} chars = {len(message.encode('utf-8'))} bytes")
-            print(f"  Artifact class: {context.get('artifact_class', 'unknown')}")
-            print(f"  Parent text length: {len(context.get('parent_text', ''))} chars")
-            print(f"  Repository files available: {len(context.get('repo_files', {}))}")
-
+    def encode(
+        self,
+        message: str,
+        context: Dict[str, Any],
+        positions_filename: Optional[str] = None,
+    ) -> List[str]:
         chunks, positions_data = self.encoder.encode_message(message, context)
-
-        total_bits = sum(chunk.get('encoded_bits', 0) for chunk in positions_data)
-        message_bytes = len(message.encode('utf-8'))
-        message_bits = message_bytes * 8
-
-        if not self.encoder.quiet:
-            print(f"\n📊 BYTE-LEVEL RESULTS")
-            print(f"  Message: {message_bytes} bytes ({message_bits} bits)")
-            print(f"  Encoded bits: {total_bits}")
-            print(f"  Chunks generated: {len(chunks)}")
-            print(f"  Bits per chunk: {total_bits / len(chunks) if chunks else 0:.1f}")
-            print(f"  Efficiency: {total_bits / message_bits * 100:.1f}%")
-
-            original_chunks = message_bytes * 2
-            new_chunks = len(chunks)
-            reduction = (original_chunks - new_chunks) / original_chunks * 100 if original_chunks > 0 else 0
-
-            print(f"\n🎯 IMPROVEMENT:")
-            print(f"  Original system (bit-level): ~{original_chunks} chunks")
-            print(f"  Byte-level system: {new_chunks} chunks")
-            print(f"  Reduction: {reduction:.0f}%")
 
         if positions_filename:
             self._save_positions(positions_filename, positions_data)
@@ -667,17 +842,16 @@ class ByteLevelStegoEncoder:
         return chunks
 
     def _save_positions(self, filename: str, data: List[Dict]):
-        try:
-            with open(filename, 'w', encoding="utf-8") as f:
-                json.dump({
-                    'metadata': {
-                        'timestamp': datetime.now().isoformat(),
-                        'encoding': 'byte_level_v1'
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "metadata": {
+                        "timestamp": datetime.now().isoformat(),
+                        "encoding": "byte_level_v1",
                     },
-                    'chunks': data
-                }, f, indent=2)
-            if not self.encoder.quiet:
-                print(f"✓ Positions saved: {filename}")
-        except Exception as e:
-            if not self.encoder.quiet:
-                print(f"⚠ Could not save: {e}")
+                    "chunks": data,
+                },
+                f,
+                indent=2,
+            )
+
