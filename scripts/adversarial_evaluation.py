@@ -680,7 +680,7 @@ def load_feature_set_from_file(
 ):
     records = load_normalized_routing_records(filepath)
 
-    effective_user_key = user_key if user_key in {"role", "role_epoch"} else "role"
+    effective_user_key = user_key
     traces_by_user = build_interaction_traces(
         records=records,
         user_key=effective_user_key,
@@ -1594,4 +1594,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
