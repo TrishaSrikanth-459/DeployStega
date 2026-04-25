@@ -98,6 +98,8 @@ def records_to_events_by_user(
             key = rec.role
         elif user_key == "role_epoch":
             key = f"{rec.role}:{rec.epoch}"
+        elif user_key == "none":
+            key = "all"
         else:
             raise ValueError(f"Unsupported user_key: {user_key}")
         buckets[key].append(rec)
