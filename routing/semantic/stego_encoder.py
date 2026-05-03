@@ -4,8 +4,9 @@ import json
 import os
 import re
 import math
+import random
 from typing import Dict, Any, List, Tuple, Optional, Set
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 import hashlib
 from urllib.parse import urlparse, urlunparse
@@ -55,6 +56,122 @@ client = AzureOpenAI(
 
 
 # ============================================================
+# Diversification config
+# ============================================================
+# These constants drive prompt-layer diversification so covert chunks do not
+# all collapse onto a single "polished GitHub note" attractor in embedding /
+# perplexity space. They never affect the bit-encoding contract.
+
+# Personas rotated per chunk. Each entry is (label, system_prompt_addendum).
+PERSONAS: List[Tuple[str, str]] = [
+    (
+        "triager",
+        "Write like a maintainer triaging issues. Be concise, sometimes refer to "
+        "labels, duplicates, or repro steps. Short factual sentences are normal.",
+    ),
+    (
+        "reviewer",
+        "Write like a code reviewer leaving a small inline note. Reference "
+        "behavior, edge cases, or naming. Keep it brief and direct.",
+    ),
+    (
+        "contributor",
+        "Write like a contributor explaining a small change. Mention motivation "
+        "and impact in plain language. Keep it short and human.",
+    ),
+    (
+        "maintainer",
+        "Write like a project maintainer leaving a brief follow-up. Tone may be "
+        "informal: 'thanks', 'good catch', short acknowledgments are fine.",
+    ),
+    (
+        "ops",
+        "Write like an engineer reporting a small operational result: a build, "
+        "test, deploy, or rollout note. Plain and matter-of-fact.",
+    ),
+    (
+        "docs",
+        "Write like a contributor noting a docs or comment cleanup. Brief, "
+        "specific, and slightly informal.",
+    ),
+]
+
+# Surface-form variants sampled per chunk. Each defines a set of permissions
+# that the prompt then reflects. Approximate weights mirror what real GitHub
+# Issue/PR edit text looks like.
+SURFACE_FORMS: List[Dict[str, Any]] = [
+    {  # short prose, terminal period
+        "label": "short_prose",
+        "weight": 30,
+        "sentence_min": 2, "sentence_max": 3,
+        "allow_bullets": False, "allow_code_block": False,
+        "force_terminal_period": True,
+    },
+    {  # medium prose
+        "label": "medium_prose",
+        "weight": 25,
+        "sentence_min": 3, "sentence_max": 5,
+        "allow_bullets": False, "allow_code_block": False,
+        "force_terminal_period": True,
+    },
+    {  # bullet list
+        "label": "bullets",
+        "weight": 15,
+        "sentence_min": 3, "sentence_max": 6,
+        "allow_bullets": True, "allow_code_block": False,
+        "force_terminal_period": False,
+    },
+    {  # inline-code-heavy prose (no fences)
+        "label": "inline_code_prose",
+        "weight": 10,
+        "sentence_min": 2, "sentence_max": 4,
+        "allow_bullets": False, "allow_code_block": False,
+        "force_terminal_period": True,
+    },
+    {  # terse one-liner
+        "label": "terse",
+        "weight": 8,
+        "sentence_min": 1, "sentence_max": 2,
+        "allow_bullets": False, "allow_code_block": False,
+        "force_terminal_period": False,
+    },
+    {  # prose plus a small fenced code block
+        "label": "code_block",
+        "weight": 7,
+        "sentence_min": 2, "sentence_max": 4,
+        "allow_bullets": False, "allow_code_block": True,
+        "force_terminal_period": True,
+    },
+    {  # casual no-period
+        "label": "casual_no_period",
+        "weight": 5,
+        "sentence_min": 1, "sentence_max": 3,
+        "allow_bullets": False, "allow_code_block": False,
+        "force_terminal_period": False,
+    },
+]
+
+# Sampling parameter band per chunk. Higher temperature / lower top_p
+# produces more varied (and therefore higher-perplexity) prose, which moves
+# the GPT-2 perplexity profile closer to real GitHub text.
+SAMPLING_BAND: Dict[str, Tuple[float, float]] = {
+    "temperature": (0.7, 1.05),
+    "top_p": (0.85, 0.97),
+}
+
+# Default per-chunk capacity. Lower than the legacy 96/128 so each chunk
+# carries ~8 forced tokens spread across several sentences instead of ~24
+# stacked into 3-6.
+DEFAULT_TARGET_BITS_PER_CHUNK = 32
+DEFAULT_MAX_CHOICES_PER_CHUNK = 8
+
+# Search paths for the optional benign exemplar corpus. The encoder degrades
+# gracefully (no few-shot, no benign-style validator) when this is missing.
+DEFAULT_BENIGN_EXEMPLARS_FILENAME = "benign_traces.jsonl"
+BENIGN_EXEMPLARS_ENV_VAR = "STEGO_BENIGN_EXEMPLARS_PATH"
+
+
+# ============================================================
 # BYTE-LEVEL Semantic Encoder
 # ============================================================
 
@@ -91,7 +208,15 @@ class ByteLevelSemanticEncoder:
 
     TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*")
 
-    def __init__(self, bins_path: str = None, quiet: bool = False):
+    def __init__(
+        self,
+        bins_path: str = None,
+        quiet: bool = False,
+        benign_exemplars_path: Optional[str] = None,
+        target_bits_per_chunk: int = DEFAULT_TARGET_BITS_PER_CHUNK,
+        max_choices_per_chunk: int = DEFAULT_MAX_CHOICES_PER_CHUNK,
+        enable_surface_validator: bool = False,
+    ):
         self.quiet = quiet
         self.bins = []
         self.large_bins = []
@@ -99,9 +224,24 @@ class ByteLevelSemanticEncoder:
         self.small_bins = []
         self.tiny_bins = []
 
+        # Diversification knobs
+        self.target_bits_per_chunk = target_bits_per_chunk
+        self.max_choices_per_chunk = max_choices_per_chunk
+        # The legacy LLM "naturalness" validator pulls every accepted output
+        # toward one polished-prose attractor, which is part of the semantic
+        # detectability problem. Default off; set True to restore the old gate.
+        self.enable_surface_validator = enable_surface_validator
+
         base_dir = os.path.dirname(os.path.abspath(__file__))
         fixed_bins_path = os.path.join(base_dir, "../../token_binning_data/bins_k16.json")
         self._load_byte_bins(fixed_bins_path)
+
+        # Optional benign exemplar corpus, grouped by artifact_class. Used for
+        # in-context style demonstrations in the prompt. Resolution order:
+        # explicit arg > env var > common candidate paths > none.
+        self._exemplars_by_class: Dict[str, List[str]] = self._load_benign_exemplars(
+            benign_exemplars_path
+        )
 
         if not self.quiet:
             print("\nBYTE-LEVEL ENCODING CAPACITY")
@@ -109,6 +249,10 @@ class ByteLevelSemanticEncoder:
             print(f"  Medium bins (64-255 words): {len(self.medium_bins)}")
             print(f"  Small bins (16-63 words): {len(self.small_bins)}")
             print(f"  Tiny bins (2-15 words): {len(self.tiny_bins)}")
+            print(f"  target_bits_per_chunk={self.target_bits_per_chunk}")
+            print(f"  max_choices_per_chunk={self.max_choices_per_chunk}")
+            exemplar_classes = sorted(self._exemplars_by_class)
+            print(f"  benign exemplars loaded for: {exemplar_classes or '(none)'}")
 
         if len(self.large_bins) == 0 and len(self.medium_bins) == 0 and len(self.small_bins) < 2:
             raise RuntimeError(
@@ -153,6 +297,112 @@ class ByteLevelSemanticEncoder:
         if not self.quiet:
             print(f"Loaded {len(self.bins)} byte-level bins")
 
+    # ------------------------------------------------------------
+    # Diversification helpers (no effect on bit-encoding contract)
+    # ------------------------------------------------------------
+
+    def _candidate_exemplar_paths(self, explicit: Optional[str]) -> List[str]:
+        candidates: List[str] = []
+        if explicit:
+            candidates.append(explicit)
+        env_path = os.environ.get(BENIGN_EXEMPLARS_ENV_VAR)
+        if env_path:
+            candidates.append(env_path)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        for rel in (
+            f"../../{DEFAULT_BENIGN_EXEMPLARS_FILENAME}",
+            f"../../../{DEFAULT_BENIGN_EXEMPLARS_FILENAME}",
+            f"../../data/{DEFAULT_BENIGN_EXEMPLARS_FILENAME}",
+            f"../../experiments/{DEFAULT_BENIGN_EXEMPLARS_FILENAME}",
+        ):
+            candidates.append(os.path.normpath(os.path.join(base_dir, rel)))
+        # Deduplicate while preserving order
+        seen: Set[str] = set()
+        ordered: List[str] = []
+        for p in candidates:
+            if p and p not in seen:
+                seen.add(p)
+                ordered.append(p)
+        return ordered
+
+    def _load_benign_exemplars(self, explicit: Optional[str]) -> Dict[str, List[str]]:
+        """Load benign texts grouped by artifact_class.
+
+        Source schema: JSONL with at least 'artifact_class' and 'semantic_text'.
+        Missing file is not an error; few-shot conditioning is then disabled.
+        """
+        for path in self._candidate_exemplar_paths(explicit):
+            if not os.path.isfile(path):
+                continue
+            try:
+                grouped: Dict[str, List[str]] = defaultdict(list)
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        cls = obj.get("artifact_class")
+                        text = obj.get("semantic_text")
+                        if not cls or not isinstance(text, str):
+                            continue
+                        text = text.strip()
+                        if not text or len(text) > 1500:
+                            continue
+                        grouped[str(cls)].append(text)
+                if grouped:
+                    if not self.quiet:
+                        print(f"Loaded benign exemplars from {path}")
+                    return dict(grouped)
+            except (OSError, UnicodeDecodeError):
+                continue
+        return {}
+
+    @staticmethod
+    def _chunk_seed(message_seed: int, chunk_idx: int) -> int:
+        # Mix message-level seed with chunk index for per-chunk reproducibility
+        return (message_seed ^ ((chunk_idx + 1) * 0x9E3779B97F4A7C15)) & 0xFFFFFFFF
+
+    @staticmethod
+    def _pick_persona(rng: random.Random) -> Tuple[str, str]:
+        return rng.choice(PERSONAS)
+
+    @staticmethod
+    def _pick_surface_form(rng: random.Random, force_code_block: bool = False) -> Dict[str, Any]:
+        if force_code_block:
+            for sf in SURFACE_FORMS:
+                if sf["label"] == "code_block":
+                    return sf
+        weights = [sf["weight"] for sf in SURFACE_FORMS]
+        return rng.choices(SURFACE_FORMS, weights=weights, k=1)[0]
+
+    def _pick_exemplars(
+        self,
+        rng: random.Random,
+        artifact_class: str,
+        k: int = 2,
+    ) -> List[str]:
+        if not self._exemplars_by_class:
+            return []
+        pool = self._exemplars_by_class.get(artifact_class)
+        if not pool:
+            # Fall back to any class so the model still sees real GitHub style
+            pool = []
+            for v in self._exemplars_by_class.values():
+                pool.extend(v)
+        if not pool:
+            return []
+        n = min(k, len(pool))
+        return rng.sample(pool, n)
+
+    def _sample_temperature(self, rng: random.Random) -> Tuple[float, float]:
+        lo_t, hi_t = SAMPLING_BAND["temperature"]
+        lo_p, hi_p = SAMPLING_BAND["top_p"]
+        return rng.uniform(lo_t, hi_t), rng.uniform(lo_p, hi_p)
+
     def encode_message(self, message: str, context: Dict[str, Any]) -> tuple[list[Any], list[Any]]:
         if not self.quiet:
             print(f"\nBYTE-LEVEL ENCODING: {message!r}")
@@ -185,20 +435,32 @@ class ByteLevelSemanticEncoder:
         used_words_global: Set[str] = set()
         previous_stegotexts: List[str] = []
 
+        # Per-message seed lets persona / surface-form / sampling choices stay
+        # reproducible across reruns of the same message while still varying
+        # across messages and across chunks within a message.
+        message_seed = int.from_bytes(
+            hashlib.sha256(message_bytes).digest()[:8], "big"
+        )
+
+        # Forward the entire context dict (after defaulting required fields)
+        # so the prompt builder can use any optional artifact-context keys the
+        # caller supplied (parent_text, repo_language, file_paths, etc.).
+        chunk_context = dict(context or {})
+        chunk_context.setdefault("artifact_class", "IssueComment")
+        chunk_context.setdefault("action", "view")
+
         for chunk_idx, chunk_choices in enumerate(chunks):
             if not self.quiet:
                 print(f"\n  --- Chunk {chunk_idx + 1} ---")
                 print(f"  Encoding {len(chunk_choices)} choices")
 
             chunk_text, chunk_positions = self._generate_byte_chunk(
-                context={
-                    "artifact_class": context.get("artifact_class", "IssueComment"),
-                    "action": context.get("action", "view"),
-                },
+                context=chunk_context,
                 chunk_idx=chunk_idx,
                 choices=chunk_choices,
                 used_words_global=used_words_global,
                 previous_stegotexts=previous_stegotexts,
+                message_seed=message_seed,
             )
 
             stegotexts.append(chunk_text)
@@ -314,16 +576,16 @@ class ByteLevelSemanticEncoder:
         return None
 
     def _choose_chunking_params(self, choices: List[Dict]) -> Tuple[int, int]:
+        # Lowered from the legacy 96/128-bit chunks (~24 forced tokens each)
+        # to a configurable, much smaller default. Fewer forced tokens per
+        # chunk gives the LLM room to weave them into natural prose, which
+        # collapses the perplexity-spike signature picked up by GPT-2 PPL.
         if not choices:
-            return 64, 16
+            return self.target_bits_per_chunk, self.max_choices_per_chunk
 
-        avg_bits = sum(choice.get("bits", 0) for choice in choices) / len(choices)
-        all_nibbles = all(choice.get("bits", 0) <= 4 for choice in choices)
-
-        if all_nibbles or avg_bits <= 4.1:
-            return 96, 24
-
-        return 128, 16
+        # Both nibble and byte choices honour the same target; the legacy
+        # split (96 vs 128) only existed to bias capacity per chunk.
+        return self.target_bits_per_chunk, self.max_choices_per_chunk
 
     def _byte_chunking(
         self,
@@ -512,6 +774,7 @@ Text:
         choices: List[Dict],
         used_words_global: Set[str],
         previous_stegotexts: List[str],
+        message_seed: int = 0,
     ) -> Tuple[str, List[Dict]]:
         artifact_class = context.get("artifact_class") or self.ARTIFACT_CYCLE[chunk_idx % len(self.ARTIFACT_CYCLE)][0]
         is_comment = artifact_class in self.COMMENT_CLASSES
@@ -520,35 +783,55 @@ Text:
 
         required_words = self._get_required_words(choices)
 
+        # Per-chunk RNG drives persona/surface-form/sampling/exemplar choices.
+        # Deterministic in (message, chunk_idx) so reruns reproduce the chunk.
+        chunk_rng = random.Random(self._chunk_seed(message_seed, chunk_idx))
+
+        code_like_words = [w for w in required_words if self._is_code_like_token(w)]
+        # Bias toward a fenced code block when the chunk is dominated by
+        # code-like required tokens; real PR/issue text routinely uses fences.
+        force_code_block = len(code_like_words) >= max(3, len(required_words) // 3)
+
+        persona_label, persona_addendum = self._pick_persona(chunk_rng)
+        surface_form = self._pick_surface_form(chunk_rng, force_code_block=force_code_block)
+        exemplars = self._pick_exemplars(chunk_rng, artifact_class, k=2)
+        temperature, top_p = self._sample_temperature(chunk_rng)
+
         prompt = self._build_byte_prompt(
             artifact_type=artifact_type_desc,
+            artifact_class=artifact_class,
             action=action,
             is_comment=is_comment,
             required_words=required_words,
             previous_stegotexts=previous_stegotexts,
+            context=context,
+            exemplars=exemplars,
+            persona_label=persona_label,
+            surface_form=surface_form,
         )
 
-        def _call_model(prompt_text: str) -> str:
+        def _call_model(prompt_text: str, system_addendum: str) -> str:
+            system_content = (
+                "You are a GitHub user writing a short developer note. Match the style "
+                "of real GitHub Issue/PR text: sometimes terse, sometimes a bullet list, "
+                "sometimes a code block, sometimes a single sentence without a final period. "
+                "Some required tokens may be code identifiers such as method names, dotted "
+                "paths, or identifiers with underscores. Preserve those character-for-character "
+                "(case, dots, underscores). Inline backticks are allowed for code-like tokens. "
+                "Do not rewrite, normalize, split, or paraphrase required tokens. "
+                + (system_addendum or "")
+            )
             response = client.chat.completions.create(
                 model=AZURE_OPENAI_DEPLOYMENT,
                 messages=[
                     ChatCompletionSystemMessageParam(
                         role="system",
-                        content=(
-                            "You are a GitHub user writing a short, natural developer note. "
-                            "Write concise, human-sounding prose with one coherent technical theme. "
-                            "Keep the note brief and avoid verbosity, laundry lists, and abrupt topic changes. "
-                            "Use standard sentence case. Do not introduce capitalized ordinary words in the middle "
-                            "of a sentence. Do not repeat the same word consecutively within a sentence. "
-                            "Some required tokens may be code identifiers such as method names, dotted paths, "
-                            "or identifiers with underscores. When a required token looks like code, preserve it "
-                            "character-for-character exactly, including uppercase/lowercase letters, periods, and underscores. "
-                            "For code-like required tokens, inline backticks are allowed and preferred. "
-                            "Do not rewrite, normalize, split, or paraphrase required tokens."
-                        ),
+                        content=system_content,
                     ),
                     ChatCompletionUserMessageParam(role="user", content=prompt_text),
                 ],
+                temperature=temperature,
+                top_p=top_p,
             )
 
             response_choices = getattr(response, "choices", None)
@@ -578,9 +861,13 @@ Text:
 
             return text
 
+        force_period = bool(surface_form.get("force_terminal_period", True))
+
         def _normalize_text(t: str) -> str:
-            t = re.sub(r"\s+", " ", t).strip()
-            if not t.endswith((".", "!", "?")):
+            # Collapse whitespace but preserve newlines (bullet lists / code blocks).
+            t = re.sub(r"[ \t]+", " ", t).strip()
+            t = re.sub(r"\n{3,}", "\n\n", t)
+            if force_period and not t.endswith((".", "!", "?", "`", ")", "]")):
                 t += "."
             return t
 
@@ -596,29 +883,36 @@ Text:
                     token_counts[key] -= 1
             return missing
 
-        text = _normalize_text(_call_model(prompt))
+        text = _normalize_text(_call_model(prompt, persona_addendum))
         positions = self._extract_byte_positions(text, choices)
         tokens = self._tokenize_for_matching(text)
         missing = _missing_required_words(text)
         order_ok = self._required_words_in_order(tokens, required_words)
-        has_dup = self._has_adjacent_duplicate_token_in_sentence(text)
+        # Adjacent-duplicate gating used to be a hard reject; relaxing it (it
+        # is a benign artifact in many real GitHub notes) preserves variance
+        # without affecting decoding.
+        has_dup = False
 
         surface_ok = True
         surface_reason = ""
-        if not missing and order_ok and len(positions) == len(choices) and not has_dup:
+        if (
+            self.enable_surface_validator
+            and not missing
+            and order_ok
+            and len(positions) == len(choices)
+        ):
             surface_ok, surface_reason = self._llm_validate_surface_naturalness(
                 text=text,
                 artifact_type_desc=artifact_type_desc,
                 required_words=required_words,
             )
 
-        max_retries = 6
+        max_retries = 4  # lowered from 6: gentler retries reduce style monoculture
         attempts = 0
         retry_styles = [
-            "Write one coherent developer note with a single technical theme.",
-            "Write a compact GitHub-style note that reads naturally.",
-            "Use 3-5 fluent sentences and keep the ideas connected.",
-            "Write a short technical update with clear cause-and-effect between sentences.",
+            "Keep the prose natural for the chosen surface form. Do not over-polish.",
+            "Match the rough length and shape of the style references shown above.",
+            "Write the way a developer would in a real GitHub note for this artifact.",
         ]
 
         while (
@@ -640,8 +934,6 @@ Text:
                 issues.append("Required words were not in the exact required order.")
             if len(positions) != len(choices):
                 issues.append(f"Matched positions were {len(positions)} of {len(choices)}.")
-            if has_dup:
-                issues.append("There was a duplicate consecutive word inside a sentence.")
             if not surface_ok:
                 issues.append(
                     "A secondary LLM validator judged the note as not natural enough"
@@ -655,25 +947,26 @@ Text:
                 + "\n".join(issues)
                 + "\nYou must keep the REQUIRED WORDS in the exact order given. Do not reorder or skip any word."
                 + "\nCode-like required tokens must be preserved exactly character-for-character."
-                + "\nKeep the result concise, natural, and focused on one coherent technical theme."
-                + "\nDo not use bullet points, checklist formatting, or fragment lists."
-                + "\nUse normal sentence case unless a required token is naturally capitalized."
-                + "\nDo not repeat the same word consecutively inside a sentence."
                 + "\n"
                 + style_hint
                 + "\nReturn only the rewritten text."
             )
 
-            text = _normalize_text(_call_model(rewrite_prompt))
+            text = _normalize_text(_call_model(rewrite_prompt, persona_addendum))
             positions = self._extract_byte_positions(text, choices)
             tokens = self._tokenize_for_matching(text)
             missing = _missing_required_words(text)
             order_ok = self._required_words_in_order(tokens, required_words)
-            has_dup = self._has_adjacent_duplicate_token_in_sentence(text)
+            has_dup = False
 
             surface_ok = True
             surface_reason = ""
-            if not missing and order_ok and len(positions) == len(choices) and not has_dup:
+            if (
+                self.enable_surface_validator
+                and not missing
+                and order_ok
+                and len(positions) == len(choices)
+            ):
                 surface_ok, surface_reason = self._llm_validate_surface_naturalness(
                     text=text,
                     artifact_type_desc=artifact_type_desc,
@@ -682,7 +975,7 @@ Text:
 
             attempts += 1
 
-        if missing or not order_ok or len(positions) != len(choices) or has_dup or not surface_ok:
+        if missing or not order_ok or len(positions) != len(choices) or not surface_ok:
             problems: List[str] = []
             if missing:
                 problems.append(f"Missing: {', '.join(missing)}")
@@ -690,8 +983,6 @@ Text:
                 problems.append("order mismatch")
             if len(positions) != len(choices):
                 problems.append(f"positions={len(positions)}/{len(choices)}")
-            if has_dup:
-                problems.append("duplicate consecutive word")
             if not surface_ok:
                 problems.append(f"surface validation: {surface_reason or 'not natural enough'}")
             raise RuntimeError(
@@ -704,79 +995,138 @@ Text:
     def _build_byte_prompt(
         self,
         artifact_type: str,
+        artifact_class: str,
         action: str,
         is_comment: bool,
         required_words: List[str],
         previous_stegotexts: List[str],
+        context: Dict[str, Any],
+        exemplars: List[str],
+        persona_label: str,
+        surface_form: Dict[str, Any],
     ) -> str:
+        # ---- 1. Optional artifact-context conditioning ----
+        # Any of these keys, if present in the caller context, are surfaced to
+        # the model so the generated text is about the actual artifact instead
+        # of a generic "software development" prompt. All are optional.
+        ctx_lines: List[str] = []
+        title = (context.get("issue_title") or context.get("title") or "").strip()
+        if title:
+            ctx_lines.append(f"Title: {title[:200]}")
+        repo_owner = (context.get("repo_owner") or "").strip()
+        repo_name = (context.get("repo_name") or "").strip()
+        if repo_owner and repo_name:
+            ctx_lines.append(f"Repo: {repo_owner}/{repo_name}")
+        repo_language = (context.get("repo_language") or "").strip()
+        if repo_language:
+            ctx_lines.append(f"Primary language: {repo_language}")
+        file_paths = context.get("file_paths") or []
+        if isinstance(file_paths, (list, tuple)) and file_paths:
+            ctx_lines.append("Relevant files: " + ", ".join(str(p) for p in list(file_paths)[:5]))
+        related_ids = context.get("related_identifiers") or []
+        if isinstance(related_ids, (list, tuple)) and related_ids:
+            ctx_lines.append("Related: " + ", ".join(str(p) for p in list(related_ids)[:5]))
+        parent_text = (context.get("parent_text") or "").strip()
+        if parent_text:
+            ctx_lines.append("Parent excerpt: " + parent_text[:400].replace("\n", " "))
+
+        context_block = ""
+        if ctx_lines:
+            context_block = "Artifact context (write something plausible for this):\n" + "\n".join(
+                f"- {ln}" for ln in ctx_lines
+            ) + "\n\n"
+
+        # ---- 2. Few-shot benign exemplars ----
+        # Real benign texts for the same artifact_class anchor the prompt to
+        # the target distribution. Skipped silently when the corpus is absent.
+        exemplar_block = ""
+        if exemplars:
+            ex_lines = []
+            for i, ex in enumerate(exemplars):
+                preview = ex.replace("\n", " ").strip()
+                if len(preview) > 220:
+                    preview = preview[:220].rstrip() + "..."
+                ex_lines.append(f"  {i + 1}. {preview}")
+            exemplar_block = (
+                "Style references (real GitHub text for this artifact type — match the "
+                "rough tone and length, do not copy content):\n"
+                + "\n".join(ex_lines)
+                + "\n\n"
+            )
+
+        # ---- 3. Repetition warning (kept, but lighter) ----
         repetition_warning = ""
         if previous_stegotexts:
             repetition_warning = (
-                "\nIMPORTANT: Previous generated texts are shown below. "
-                "Avoid reusing distinctive phrases, sentence shapes, or the same overall idea. "
-                "It is fine to reuse ordinary technical words when needed.\n"
-                "Previous texts:\n"
+                "Earlier generated chunks (use different wording / shape):\n"
             )
             for i, prev in enumerate(previous_stegotexts[-3:]):
-                repetition_warning += f"  {i + 1}. {prev[:100]}...\n"
+                preview = prev.replace("\n", " ")
+                repetition_warning += f"  {i + 1}. {preview[:100]}...\n"
             repetition_warning += "\n"
 
+        # ---- 4. Required-words instruction ----
         required_order_list = "\n".join(
             [f"{i + 1}. {self._format_required_word_for_prompt(w)}" for i, w in enumerate(required_words)]
         )
-
-        sentence_min = 3
-        sentence_max = 5 if len(required_words) <= 16 else 6
-
         code_like_words = [w for w in required_words if self._is_code_like_token(w)]
         code_hint = ""
         if code_like_words:
             formatted_code_words = ", ".join(f"`{w}`" for w in code_like_words[:8])
             code_hint = (
-                "\nSome REQUIRED WORDS are code-like tokens. "
-                "Preserve those code-like tokens exactly character-for-character. "
-                "Inline backticks are allowed and preferred for code-like tokens. "
-                "Do not use fenced code blocks.\n"
+                "\nSome REQUIRED WORDS are code-like tokens. Preserve them exactly "
+                "character-for-character. Inline backticks are preferred.\n"
                 f"Code-like examples in this chunk: {formatted_code_words}"
             )
-
-        structure_hint = ""
-        if len(required_words) >= 16:
-            structure_hint = (
-                "\nKeep the note compact and coherent around one technical theme. "
-                "Avoid making it read like a laundry list of unrelated tools or APIs."
-            )
-
         incorporate_instruction = (
-            "REQUIRED WORDS (must all appear at least once, as standalone tokens, case-insensitive) "
-            "IN THIS EXACT ORDER:\n"
+            "REQUIRED WORDS (must all appear at least once, as standalone tokens, "
+            "case-insensitive) IN THIS EXACT ORDER:\n"
             f"{required_order_list}\n"
-            "For ordinary words, use normal sentence case and do not capitalize them in the middle "
-            "of a sentence unless grammar truly requires it. "
-            "For code-like tokens, preserve the exact spelling, punctuation, and casing.\n"
-            "Do not split required tokens. Inline code is allowed for code-like tokens. "
-            "Do not use fenced code blocks."
+            "Do not split, paraphrase, or alter required tokens. For ordinary words "
+            "use normal sentence case."
         )
 
-        if action == "comment" or is_comment:
-            opening = f"{repetition_warning}Write a new short {artifact_type} reply about software development."
-        elif action == "edit":
-            opening = f"{repetition_warning}Write a short {artifact_type} update about software development."
-        else:
-            opening = f"{repetition_warning}Write a short note a developer might make while reviewing a {artifact_type} about software development."
+        # ---- 5. Surface-form variation ----
+        sentence_min = int(surface_form.get("sentence_min", 2))
+        sentence_max = int(surface_form.get("sentence_max", 4))
+        allow_bullets = bool(surface_form.get("allow_bullets", False))
+        allow_code_block = bool(surface_form.get("allow_code_block", False))
+        force_period = bool(surface_form.get("force_terminal_period", True))
+        sf_label = surface_form.get("label", "prose")
 
+        format_hints: List[str] = []
+        if allow_bullets:
+            format_hints.append(
+                "Format as a brief bullet list (3-6 items, '-' prefix). Bullets are short fragments."
+            )
+        elif allow_code_block:
+            format_hints.append(
+                "Use a small fenced ```code block``` (a few lines) plus 1-2 sentences of prose around it."
+            )
+        else:
+            format_hints.append(
+                f"Write {sentence_min}-{sentence_max} sentences as prose. No bullets, no fenced code blocks."
+            )
+        if not force_period:
+            format_hints.append("It is fine if the note does not end in a period.")
+        else:
+            format_hints.append("End with a sentence-final period.")
+
+        # ---- 6. Opening framed by action / persona ----
+        if action == "comment" or is_comment:
+            opening = f"Write a new {artifact_type} reply."
+        elif action == "edit":
+            opening = f"Write an updated {artifact_type} body or comment."
+        else:
+            opening = f"Write a short note that fits a {artifact_type} on the artifact above."
+
+        # ---- 7. Assemble ----
         return f"""{opening}
 
-Write {sentence_min}-{sentence_max} concise sentences. Keep the overall output short, human, and natural. Use one coherent technical theme rather than many disconnected topics.{structure_hint}{code_hint}
+{context_block}{exemplar_block}{repetition_warning}{incorporate_instruction}{code_hint}
 
-{incorporate_instruction}
-
-Additional style rules:
-- Use standard sentence case.
-- Do not introduce capitalized ordinary words in the middle of a sentence.
-- Do not repeat the same word consecutively inside a sentence.
-- Keep the prose concise and non-verbose.
-- Avoid bullet points, checklist formatting, and semicolon-separated lists.
+Surface form for this chunk: {sf_label} (persona: {persona_label})
+- """ + "\n- ".join(format_hints) + """
 
 Return only the text:"""
 
@@ -822,8 +1172,23 @@ Return only the text:"""
 
 
 class ByteLevelStegoEncoder:
-    def __init__(self, bins_path: str = None, quiet: bool = False):
-        self.encoder = ByteLevelSemanticEncoder(bins_path, quiet=quiet)
+    def __init__(
+        self,
+        bins_path: str = None,
+        quiet: bool = False,
+        benign_exemplars_path: Optional[str] = None,
+        target_bits_per_chunk: int = DEFAULT_TARGET_BITS_PER_CHUNK,
+        max_choices_per_chunk: int = DEFAULT_MAX_CHOICES_PER_CHUNK,
+        enable_surface_validator: bool = False,
+    ):
+        self.encoder = ByteLevelSemanticEncoder(
+            bins_path,
+            quiet=quiet,
+            benign_exemplars_path=benign_exemplars_path,
+            target_bits_per_chunk=target_bits_per_chunk,
+            max_choices_per_chunk=max_choices_per_chunk,
+            enable_surface_validator=enable_surface_validator,
+        )
 
     def encode(
         self,
