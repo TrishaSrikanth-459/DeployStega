@@ -33,6 +33,7 @@ import json
 import math
 import os
 import sys
+import time
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Dict, List
@@ -47,6 +48,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from adversarial_evaluation import run_bert_evaluation, run_engineered_evaluation
+from build_structural_parity_dataset import build_structural_parity_dataset
+
+
+DEFAULT_PARITY_MAX_PAIRS = 500
+DEFAULT_PARITY_EVENTS_PER_FILE = 200
 
 
 # ----------------------------------------------------------------------
@@ -161,6 +167,55 @@ def parse_args() -> argparse.Namespace:
         default=128,
         help="Maximum BERT token length",
     )
+    parser.add_argument(
+        "--no-structural-parity",
+        action="store_true",
+        help=(
+            "Disable automatic paired structural-parity inputs. By default run_ablation "
+            "evaluates on carrier-paired benign/covert traces so epsilon is not driven "
+            "by generator artifacts such as trace length, role labels, repo namespace, "
+            "identifier distributions, or timestamp anchors."
+        ),
+    )
+    parser.add_argument(
+        "--parity-max-pairs",
+        type=int,
+        default=DEFAULT_PARITY_MAX_PAIRS,
+        help=(
+            "Cap on structurally paired files. Default keeps parity ablations tractable; "
+            "set to 0 for the full uncapped paired dataset."
+        ),
+    )
+    parser.add_argument(
+        "--parity-events-per-file",
+        type=int,
+        default=DEFAULT_PARITY_EVENTS_PER_FILE,
+        help=(
+            "Cap on carrier events per paired file. Default preserves structural parity "
+            "while preventing semantic extractors from running for days; set to 0 for no cap."
+        ),
+    )
+    parser.add_argument(
+        "--configs",
+        type=str,
+        default="",
+        help="Optional comma-separated ablation config names to run.",
+    )
+    parser.add_argument(
+        "--parity-text-mode",
+        choices=["benign_trace", "generated_pool", "corpus_cover"],
+        default="benign_trace",
+        help=(
+            "Semantic text source for parity inputs. benign_trace keeps text from benign "
+            "carrier traces when available; generated_pool is diagnostic-only."
+        ),
+    )
+    parser.add_argument(
+        "--parity-role",
+        type=str,
+        default="sender",
+        help="Role label assigned to both benign and covert paired carrier events.",
+    )
     return parser.parse_args()
 
 
@@ -170,12 +225,6 @@ def parse_args() -> argparse.Namespace:
 def build_ablation_configs(args: argparse.Namespace) -> List[Dict[str, Any]]:
     configs: List[Dict[str, Any]] = [
         {
-            "name": "baseline_cross_rf",
-            "features": "cross",
-            "classifier": "rf",
-            "bert_context": False,
-        },
-        {
             "name": "behavioral_only_rf",
             "features": "behavioral",
             "classifier": "rf",
@@ -184,6 +233,12 @@ def build_ablation_configs(args: argparse.Namespace) -> List[Dict[str, Any]]:
         {
             "name": "semantic_only_rf",
             "features": "semantic",
+            "classifier": "rf",
+            "bert_context": False,
+        },
+        {
+            "name": "baseline_cross_rf",
+            "features": "cross",
             "classifier": "rf",
             "bert_context": False,
         },
@@ -220,6 +275,15 @@ def build_ablation_configs(args: argparse.Namespace) -> List[Dict[str, Any]]:
                     "bert_context": True,
                 }
             )
+
+    if args.configs:
+        requested = [name.strip() for name in args.configs.split(",") if name.strip()]
+        known = {cfg["name"] for cfg in configs}
+        unknown = sorted(set(requested) - known)
+        if unknown:
+            raise ValueError(f"Unknown --configs entries: {', '.join(unknown)}")
+        requested_set = set(requested)
+        configs = [cfg for cfg in configs if cfg["name"] in requested_set]
 
     return configs
 
@@ -315,6 +379,47 @@ def make_error_row(cfg: Dict[str, Any], err: Exception) -> Dict[str, Any]:
     }
 
 
+SUMMARY_FIELDNAMES = [
+    "name",
+    "features",
+    "classifier",
+    "bert_context",
+    "epsilon",
+    "roc_auc",
+    "target_fpr",
+    "validation_threshold",
+    "validation_fpr",
+    "validation_tpr",
+    "actual_fpr",
+    "tpr",
+    "tp",
+    "fp",
+    "tn",
+    "fn",
+    "feature_dim",
+    "n_fit",
+    "n_validation",
+    "n_test",
+    "error",
+]
+
+
+def write_summary_files(output_root: Path, summary: List[Dict[str, Any]]) -> None:
+    csv_path = output_root / "ablation_summary.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=SUMMARY_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(summary)
+
+    with open(output_root / "ablation_summary.json", "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+
+def write_status(path: Path, payload: Dict[str, Any]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
 # ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
@@ -324,8 +429,41 @@ def main() -> None:
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
+    original_inputs = {"benign_dir": args.benign_dir, "covert_dir": args.covert_dir}
+    structural_parity_summary = None
+    if not args.no_structural_parity:
+        parity_root = output_root / "structural_parity_inputs"
+        parity_pair_cap = None if args.parity_max_pairs == 0 else args.parity_max_pairs
+        parity_event_cap = None if args.parity_events_per_file == 0 else args.parity_events_per_file
+        parity_benign, parity_covert, structural_parity_summary = build_structural_parity_dataset(
+            args.benign_dir,
+            args.covert_dir,
+            parity_root,
+            project_root=PROJECT_ROOT,
+            seed=args.seed,
+            max_pairs=parity_pair_cap,
+            max_events_per_file=parity_event_cap,
+            role=args.parity_role,
+            text_mode=args.parity_text_mode,
+        )
+        args.benign_dir = str(parity_benign)
+        args.covert_dir = str(parity_covert)
+        print("\nStructural parity inputs enabled.")
+        print(f"Original benign dir: {original_inputs['benign_dir']}")
+        print(f"Original covert dir: {original_inputs['covert_dir']}")
+        print(f"Parity benign dir  : {args.benign_dir}")
+        print(f"Parity covert dir  : {args.covert_dir}")
+        print(f"Paired files       : {structural_parity_summary['pair_count']}")
+        print(f"Events per file cap: {structural_parity_summary.get('max_events_per_file')}")
+        print(f"Parity text mode  : {structural_parity_summary.get('text_mode')}")
+        print(f"Generated text pool: {structural_parity_summary.get('generated_text_pool_size')}")
+
+    run_args = vars(args).copy()
+    run_args["original_inputs"] = original_inputs
+    run_args["structural_parity_enabled"] = not args.no_structural_parity
+    run_args["structural_parity_summary"] = structural_parity_summary
     with open(output_root / "ablation_args.json", "w", encoding="utf-8") as f:
-        json.dump(vars(args), f, indent=2)
+        json.dump(run_args, f, indent=2)
 
     configs = build_ablation_configs(args)
 
@@ -341,7 +479,20 @@ def main() -> None:
         print("=" * 72)
 
         out_dir = output_root / cfg["name"]
+        out_dir.mkdir(parents=True, exist_ok=True)
         eval_args = make_eval_args(args, cfg, out_dir)
+        status_path = out_dir / "status.json"
+        started_at = time.time()
+        write_status(
+            status_path,
+            {
+                "state": "running",
+                "name": cfg["name"],
+                "features": cfg["features"],
+                "classifier": cfg["classifier"],
+                "started_unix": started_at,
+            },
+        )
 
         try:
             if cfg["classifier"] == "bert":
@@ -349,7 +500,22 @@ def main() -> None:
             else:
                 results = run_engineered_evaluation(eval_args)
 
-            summary.append(make_success_row(cfg, results))
+            row = make_success_row(cfg, results)
+            summary.append(row)
+            write_status(
+                status_path,
+                {
+                    "state": "complete",
+                    "name": cfg["name"],
+                    "features": cfg["features"],
+                    "classifier": cfg["classifier"],
+                    "started_unix": started_at,
+                    "finished_unix": time.time(),
+                    "elapsed_seconds": time.time() - started_at,
+                    "results": row,
+                },
+            )
+            write_summary_files(output_root, summary)
 
         except Exception as err:
             print(f"Error in {cfg['name']}: {err}")
@@ -406,5 +572,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
