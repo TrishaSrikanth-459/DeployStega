@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 REQUIRED_ENV = (
     "AZURE_OPENAI_API_KEY",
@@ -96,6 +96,168 @@ def read_jsonl_texts(trace_dir: Path, limit: int = 2500) -> List[str]:
     return texts
 
 
+def comparable_pr_issue_edit_texts(trace_dir: Path, limit: int = 2500) -> List[str]:
+    """Collect normalized PullRequest/Issue edit text for source-leak smoke tests.
+
+    This mirrors the diagnostic that caught the previous semantic source gap:
+    compare only event types both sides actually share, after applying the same
+    symmetric source-format normalization used by adversarial_evaluation.py.
+    """
+    from scripts.adversarial_evaluation import normalize_semantic_text_for_detection
+
+    texts: List[str] = []
+    keys = ("semantic_text", "text", "body", "message", "content", "title")
+    for path in sorted(trace_dir.glob("*.jsonl")):
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+
+                artifact_class = str(obj.get("artifact_class") or obj.get("artifactClass") or "")
+                if artifact_class not in {"PullRequest", "Issue"}:
+                    continue
+
+                raw_text = ""
+                for key in keys:
+                    value = obj.get(key)
+                    if value is not None and str(value).strip():
+                        raw_text = str(value)
+                        break
+                text = normalize_semantic_text_for_detection(raw_text)
+                if not text or len(text.split()) < 4:
+                    continue
+
+                action_raw = obj.get("action") or obj.get("action_type") or obj.get("actionType") or obj.get("event_type")
+                action = str(action_raw).strip().lower() if action_raw else "edit"
+                if action != "edit":
+                    continue
+
+                texts.append(text)
+                if len(texts) >= limit:
+                    return texts
+    return texts
+
+
+def tfidf_source_diagnostic(
+    benign_dir: Path,
+    covert_sender_dir: Path,
+    report_path: Path,
+    *,
+    max_samples_per_class: int = 2500,
+    seed: int = 42,
+    repeats: int = 5,
+) -> Dict[str, Any]:
+    """Run a lightweight semantic source-leak smoke test.
+
+    A near-perfect TF-IDF classifier here means the run is probably measuring
+    generator/source style rather than subtle steganographic semantics.
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import accuracy_score, roc_auc_score
+    from sklearn.model_selection import train_test_split
+    from sklearn.pipeline import make_pipeline
+
+    benign_texts = comparable_pr_issue_edit_texts(benign_dir, limit=max_samples_per_class)
+    covert_texts = comparable_pr_issue_edit_texts(covert_sender_dir, limit=max_samples_per_class)
+
+    rng = __import__("random").Random(seed)
+    rng.shuffle(benign_texts)
+    rng.shuffle(covert_texts)
+    n = min(len(benign_texts), len(covert_texts), max_samples_per_class)
+
+    report: Dict[str, Any] = {
+        "mode": "tfidf_source_diagnostic",
+        "support": "PullRequest/Issue edit text only",
+        "normalization": "normalize_semantic_text_for_detection",
+        "benign_count": len(benign_texts),
+        "covert_count": len(covert_texts),
+        "balanced_n_per_class": n,
+        "auc_mean": None,
+        "accuracy_mean": None,
+        "runs": [],
+        "benign_examples": benign_texts[:5],
+        "covert_examples": covert_texts[:5],
+    }
+
+    if n < 20:
+        report["skipped"] = True
+        report["reason"] = "Need at least 20 comparable texts per class for a stable smoke diagnostic."
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps(report, indent=2)[:4000])
+        return report
+
+    texts = benign_texts[:n] + covert_texts[:n]
+    labels = [0] * n + [1] * n
+
+    for rep in range(repeats):
+        x_train, x_test, y_train, y_test = train_test_split(
+            texts,
+            labels,
+            test_size=0.35,
+            random_state=seed + rep,
+            stratify=labels,
+        )
+        clf = make_pipeline(
+            TfidfVectorizer(
+                lowercase=True,
+                strip_accents="unicode",
+                ngram_range=(1, 2),
+                min_df=2 if n >= 80 else 1,
+                max_features=20000,
+            ),
+            LogisticRegression(max_iter=2000, class_weight="balanced"),
+        )
+        clf.fit(x_train, y_train)
+        scores = clf.predict_proba(x_test)[:, 1]
+        preds = (scores >= 0.5).astype(int)
+        report["runs"].append(
+            {
+                "repeat": rep,
+                "auc": float(roc_auc_score(y_test, scores)),
+                "accuracy": float(accuracy_score(y_test, preds)),
+            }
+        )
+
+    report["auc_mean"] = float(sum(r["auc"] for r in report["runs"]) / len(report["runs"]))
+    report["accuracy_mean"] = float(sum(r["accuracy"] for r in report["runs"]) / len(report["runs"]))
+    report["skipped"] = False
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(json.dumps(report, indent=2)[:4000])
+    return report
+
+
+def enforce_semantic_source_gate(
+    report: Dict[str, Any],
+    *,
+    max_auc: float,
+    max_accuracy: float,
+    label: str,
+) -> None:
+    if report.get("skipped"):
+        print(f"{label}: semantic source diagnostic skipped: {report.get('reason')}")
+        return
+    auc = report.get("auc_mean")
+    acc = report.get("accuracy_mean")
+    if auc is None or acc is None:
+        return
+    if float(auc) >= max_auc and float(acc) >= max_accuracy:
+        raise SystemExit(
+            f"{label}: semantic source diagnostic failed "
+            f"(AUC={auc:.4f}, accuracy={acc:.4f}). "
+            "Not starting/continuing the full run because benign/covert text is still too source-separable."
+        )
+
+
 def trace_quality_report(sender_dir: Path, report_path: Path) -> Dict[str, Any]:
     files = sorted(sender_dir.glob("*.jsonl"))
     artifact_action: Dict[str, int] = {}
@@ -146,11 +308,15 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=Path("experiments/colab_full_run"))
     parser.add_argument("--target-traces", type=int, default=4000)
     parser.add_argument("--min-traces", type=int, default=3500)
+    parser.add_argument("--smoke-traces", type=int, default=25)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--skip-generation", action="store_true")
     parser.add_argument("--skip-ablation", action="store_true")
     parser.add_argument("--bert-epochs", type=int, default=3)
     parser.add_argument("--bert-max-samples", type=int, default=10000)
+    parser.add_argument("--skip-semantic-smoke-gate", action="store_true")
+    parser.add_argument("--semantic-smoke-max-auc", type=float, default=0.98)
+    parser.add_argument("--semantic-smoke-max-accuracy", type=float, default=0.95)
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -180,7 +346,7 @@ def main() -> None:
             "--behavior-priors", "behavior_priors.json",
             "--feasibility-dir", "benign_traces",
             "--manifest", "experiments/experiment_manifest.json",
-            "--num-traces", "3",
+            "--num-traces", str(args.smoke_traces),
             "--workers", "1",
             "--seed", "123",
             "--max-secret-chunks", "20",
@@ -191,6 +357,21 @@ def main() -> None:
         if smoke_summary.get("verification_metrics", {}).get("verification_success_rate") != 1.0:
             raise SystemExit("Smoke generation failed token-binning verification; not starting full run.")
         trace_quality_report(smoke_dir / "sender", out / "smoke_quality_report.json")
+        smoke_semantic_report = tfidf_source_diagnostic(
+            root / "benign_traces",
+            smoke_dir / "sender",
+            out / "smoke_semantic_source_diagnostic.json",
+            max_samples_per_class=2500,
+            seed=123,
+            repeats=5,
+        )
+        if not args.skip_semantic_smoke_gate:
+            enforce_semantic_source_gate(
+                smoke_semantic_report,
+                max_auc=args.semantic_smoke_max_auc,
+                max_accuracy=args.semantic_smoke_max_accuracy,
+                label="Smoke",
+            )
 
         full_dir.mkdir(parents=True, exist_ok=True)
         run([
@@ -219,6 +400,21 @@ def main() -> None:
         raise SystemExit(f"Need at least {args.min_traces} trace pairs; got sender={sender_count}, receiver={receiver_count}")
 
     trace_quality_report(full_dir / "sender", out / "full_quality_report.json")
+    full_semantic_report = tfidf_source_diagnostic(
+        root / "benign_traces",
+        full_dir / "sender",
+        out / "full_semantic_source_diagnostic.json",
+        max_samples_per_class=2500,
+        seed=42,
+        repeats=5,
+    )
+    if not args.skip_semantic_smoke_gate:
+        enforce_semantic_source_gate(
+            full_semantic_report,
+            max_auc=args.semantic_smoke_max_auc,
+            max_accuracy=args.semantic_smoke_max_accuracy,
+            label="Full generation",
+        )
 
     if not args.skip_ablation:
         ablation_out = out / "ablation_results"
