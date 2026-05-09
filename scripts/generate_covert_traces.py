@@ -482,7 +482,7 @@ def analyze_secret_corpus(
     byte_values = sorted(record["secret_bytes"] for record in analyzable_records)
 
     threshold_counts = {}
-    for threshold in [8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 60, 80, 100]:
+    for threshold in [8, 10, 12, 14, 16, 20, 24, 28, 32]:
         kept = sum(1 for value in chunk_values if value <= threshold)
         threshold_counts[str(threshold)] = {
             "kept": kept,
@@ -1201,7 +1201,7 @@ def main():
                         help="Skip secret IDs that already have both sender and receiver traces")
     parser.add_argument("--max-secret-chunks", type=int, default=None,
                         help="Optional manual override. If omitted, script auto-selects the smallest threshold that keeps at least min-secret-keep-rate of non-empty secrets.")
-    parser.add_argument("--estimated-bytes-per-chunk", type=int, default=2,
+    parser.add_argument("--estimated-bytes-per-chunk", type=int, default=12,
                         help="Estimated payload bytes carried per chunk for pre-filtering secrets")
     parser.add_argument("--min-secret-keep-rate", type=float, default=0.95,
                         help="Minimum fraction of non-empty secrets the auto-selected max-secret-chunks must retain")
@@ -1352,7 +1352,7 @@ def main():
         f"max={chunk_stats['secret_bytes']['max']}"
     )
 
-    for threshold in ["8", "10", "12", "14", "16", "20", "24", "28", "32", "40", "60", "80", "100"]:
+    for threshold in ["8", "10", "12", "14", "16", "20", "24", "28", "32"]:
         info = chunk_stats["threshold_counts"][threshold]
         print(f"  Keep <= {threshold} chunks: {info['kept']} secrets ({info['keep_rate']:.2%})")
 
