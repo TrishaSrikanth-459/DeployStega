@@ -21,27 +21,18 @@ def _stable_artifact_ids(rec: RoutingTraceRecord) -> Tuple[Any, ...]:
 
 
 def _stable_metadata(rec: RoutingTraceRecord) -> Tuple[Any, ...]:
+    # Keep routing metadata strictly structural. Semantic payloads are exposed
+    # through InteractionEvent.semantic_content; duplicating them in metadata
+    # lets behavioral/routing features accidentally depend on text/source
+    # formatting through event sorting or metadata scans.
     base = (
         ("role", rec.role),
         ("epoch", rec.epoch),
-        ("url", rec.url),
         ("action_type", rec.action_type),
         ("artifact_class", rec.artifact_class),
     )
 
-    semantic_part: Tuple[Tuple[Any, Any], ...] = ()
-    if rec.semantic_ref is not None:
-        semantic_part += (("semantic_ref", rec.semantic_ref),)
-    if rec.semantic_text is not None:
-        semantic_part += (("semantic_text", rec.semantic_text),)
-    if rec.semantic_meaning is not None:
-        semantic_part += (("semantic_meaning", rec.semantic_meaning),)
-    if rec.semantic_label is not None:
-        semantic_part += (("semantic_label", rec.semantic_label),)
-    if rec.semantic_content_type is not None:
-        semantic_part += (("semantic_content_type", rec.semantic_content_type),)
-
-    return base + tuple(rec.metadata) + semantic_part
+    return base + tuple(rec.metadata)
 
 
 def _synthesize_timestamp(
@@ -91,9 +82,9 @@ def records_to_events_by_user(
     user_key: str = "role",
     timing_policy: Optional[TimingPolicy] = None,
 ) -> Dict[str, Tuple[InteractionEvent, ...]]:
-    buckets: DefaultDict[str, List[RoutingTraceRecord]] = defaultdict(list)
+    buckets: DefaultDict[str, List[Tuple[int, RoutingTraceRecord]]] = defaultdict(list)
 
-    for rec in records:
+    for input_idx, rec in enumerate(records):
         if user_key == "role":
             key = rec.role
         elif user_key == "role_epoch":
@@ -102,19 +93,21 @@ def records_to_events_by_user(
             key = "all"
         else:
             raise ValueError(f"Unsupported user_key: {user_key}")
-        buckets[key].append(rec)
+        buckets[key].append((input_idx, rec))
 
     if not buckets:
         raise ValueError("No routing trace records provided")
 
     out: Dict[str, Tuple[InteractionEvent, ...]] = {}
 
-    for user, recs in buckets.items():
-        def sort_key(r: RoutingTraceRecord) -> Tuple[Any, ...]:
+    for user, indexed_recs in buckets.items():
+        def sort_key(item: Tuple[int, RoutingTraceRecord]) -> Tuple[Any, ...]:
+            original_idx, r = item
             t = r.timestamp if r.timestamp is not None else float("inf")
-            return (t, r.epoch, r.stable_key())
+            return (t, r.epoch, original_idx)
 
-        recs_sorted = sorted(recs, key=sort_key)
+        indexed_sorted = sorted(indexed_recs, key=sort_key)
+        recs_sorted = [rec for _, rec in indexed_sorted]
 
         if any(r.timestamp is None for r in recs_sorted) and timing_policy is None:
             raise ValueError("Routing trace contains records without timestamps; timing_policy required")
@@ -146,8 +139,10 @@ def records_to_events_by_user(
                 bucket_size=bucket_size
             ))
 
-        events_sorted = sorted(events, key=lambda e: (e.timestamp, e.action_type, e.artifact_ids, e.metadata))
-        out[user] = tuple(events_sorted)
+        # recs_sorted is already chronological with source-order tie breaking.
+        # Do not re-sort by action/artifact/metadata; lexicographic tie-breaks
+        # on raw identifiers or semantic text can create source fingerprints.
+        out[user] = tuple(events)
 
     return out
 

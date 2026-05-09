@@ -95,6 +95,9 @@ from scripts.experiment_context import load_experiment_context
 
 
 NUMERIC_STAT_COUNT = 12
+TEXT_KEYS = ("semantic_text", "text", "body", "message", "content", "title")
+COMPARABLE_SEMANTIC_ARTIFACTS = {"PullRequest", "Issue"}
+COMPARABLE_SEMANTIC_ACTIONS = {"edit"}
 
 
 # ----------------------------------------------------------------------
@@ -583,6 +586,56 @@ def parse_timestamp_value(value: Any) -> Optional[float]:
     return None
 
 
+def first_text_field(obj: Dict[str, Any]) -> str:
+    for key in TEXT_KEYS:
+        value = obj.get(key)
+        if value is not None and str(value).strip():
+            return str(value)
+    return ""
+
+
+def infer_action_type(
+    obj: Dict[str, Any],
+    artifact_class: str,
+    has_text: bool,
+) -> str:
+    action_raw = (
+        obj.get("action_type")
+        or obj.get("actionType")
+        or obj.get("event_type")
+        or obj.get("type")
+        or obj.get("action")
+    )
+    if action_raw is not None:
+        return str(action_raw).strip() or "view"
+
+    # Normalize missing action fields by inferring only coarse observable
+    # GitHub activity from artifact/text presence. This avoids a source leak
+    # where benign rows without an action become "route_access" while covert
+    # rows carry explicit "edit".
+    if has_text:
+        if artifact_class in {"Issue", "PullRequest"}:
+            return "edit"
+        if artifact_class in {"IssueComment", "PullRequestReviewComment", "PullRequestComment", "CommitComment"}:
+            return "comment"
+    return "view"
+
+
+def is_comparable_semantic_support(artifact_class: str, action_type: str) -> bool:
+    """Return whether semantic text is in the shared benign/covert support.
+
+    The semantic detector should not win by comparing benign commit/release/log
+    prose against covert PR/issue body payloads. We retain the full event stream
+    for behavioral/routing features, but semantic content is exposed only for
+    PullRequest/Issue edit rows, which is the shared text-bearing support used
+    by the covert generator.
+    """
+    return (
+        str(artifact_class) in COMPARABLE_SEMANTIC_ARTIFACTS
+        and str(action_type).strip().lower() in COMPARABLE_SEMANTIC_ACTIONS
+    )
+
+
 def normalize_routing_record(obj: Dict[str, Any], filepath: Path, lineno: int) -> Optional[RoutingTraceRecord]:
     if not isinstance(obj, dict):
         raise TypeError(f"JSONL line {lineno} in {filepath} must be an object")
@@ -638,33 +691,13 @@ def normalize_routing_record(obj: Dict[str, Any], filepath: Path, lineno: int) -
     else:
         metadata = (metadata_raw,)
 
-    semantic_text = normalize_semantic_text_for_detection(
-        obj.get("semantic_text") or obj.get("text") or obj.get("body") or obj.get("message") or obj.get("content") or obj.get("title")
+    raw_text = first_text_field(obj)
+    action_type = infer_action_type(obj, artifact_class, bool(raw_text.strip()))
+    semantic_text = (
+        normalize_semantic_text_for_detection(raw_text)
+        if is_comparable_semantic_support(artifact_class, action_type)
+        else ""
     )
-
-    action_raw = (
-        obj.get("action_type")
-        or obj.get("actionType")
-        or obj.get("event_type")
-        or obj.get("type")
-        or obj.get("action")
-    )
-    if action_raw is None:
-        # Normalize missing action fields by inferring only coarse observable
-        # GitHub activity from artifact/text presence. This avoids a source leak
-        # where benign rows without an action become "route_access" while covert
-        # rows carry explicit "edit".
-        if semantic_text:
-            if artifact_class in {"Issue", "PullRequest"}:
-                action_type = "edit"
-            elif artifact_class in {"IssueComment", "PullRequestReviewComment", "PullRequestComment", "CommitComment"}:
-                action_type = "comment"
-            else:
-                action_type = "view"
-        else:
-            action_type = "view"
-    else:
-        action_type = str(action_raw).strip() or "view"
 
     return RoutingTraceRecord(
         role=role,
@@ -1340,42 +1373,22 @@ def normalize_semantic_text_for_detection(text: Any) -> str:
 
 
 def text_from_event(event: Dict[str, Any]) -> str:
-    for key in ("semantic_text", "text", "body", "message", "content", "title"):
-        value = event.get(key)
-        if value is not None and str(value).strip():
-            return normalize_semantic_text_for_detection(value)
-    return ""
+    artifact_class = str(event.get("artifact_class") or event.get("artifactClass") or "")
+    raw_text = first_text_field(event)
+    action_type = infer_action_type(event, artifact_class, bool(raw_text.strip()))
+    if not is_comparable_semantic_support(artifact_class, action_type):
+        return ""
+    return normalize_semantic_text_for_detection(raw_text)
 
 
 def context_from_event(event: Dict[str, Any]) -> str:
     parts: List[str] = []
 
-    artifact_class = event.get("artifact_class")
-    if artifact_class:
-        parts.append(f"Artifact: {artifact_class}")
-
-    action = event.get("action") or event.get("event_type") or event.get("type")
-    if action:
-        parts.append(f"Action: {action}")
-
     parent = event.get("parent_text")
     if parent and len(str(parent)) > 10:
-        parts.append(f"Parent: {str(parent)[:200]}")
-
-    repo = event.get("repo") or event.get("repository")
-    if repo:
-        parts.append(f"Repo: {repo}")
-
-    repo_files = event.get("repo_files")
-    if isinstance(repo_files, list):
-        paths = []
-        for item in repo_files[:5]:
-            if isinstance(item, dict) and item.get("path"):
-                paths.append(str(item["path"]))
-            elif isinstance(item, str):
-                paths.append(item)
-        if paths:
-            parts.append(f"Files: {', '.join(paths)}")
+        normalized_parent = normalize_semantic_text_for_detection(parent)
+        if normalized_parent:
+            parts.append(f"Parent: {normalized_parent[:200]}")
 
     return " | ".join(parts)
 
