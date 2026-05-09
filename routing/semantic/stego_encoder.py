@@ -960,10 +960,8 @@ Text:
             system_content = (
                 "You are editing a GitHub Pull Request or Issue body. Match real PR/issue body style: "
                 "a compact title-like clause plus practical rationale, repro, summary, or test-plan detail. "
-                "Prefer concrete maintainer phrasing such as fix:, feat:, docs:, test:, this PR, add support, "
-                "backport, cherry-pick, failing test, issue, or test plan when it fits. "
                 "Avoid the over-polished release-note pattern where every sentence starts with 'The' "
-                "and repeats words like now/updates/handling/behavior/during; vary openings naturally. "
+                "and repeats words like now/updates/handling; vary openings naturally. "
                 "Do not add raw URLs, approval footers, emails, markdown tables, checklists, or code fences. "
                 "Avoid dumping identifiers as a bare checklist, code fence, or sentence-opening token run. "
                 "Some required tokens may be code identifiers such as method names, dotted "
@@ -1206,11 +1204,9 @@ Text:
         # contaminating the comparison while still discouraging token inventories.
         if not exemplars:
             exemplars = [
-                "fix: keep parser fallback errors stable. Summary: preserve the original message when config validation retries. Test Plan: ran parser unit tests locally.",
-                "This PR fixes stale selection after failed sync. The first render kept an old value after retry; this moves the guard earlier and adds coverage for the edge case.",
-                "docs: clarify setup for the local cache path. The README used the old flag name, which made the example fail on a fresh checkout.",
-                "test: add coverage for the issue where reconnect leaves the account toast open. The assertion now checks both the loading state and the final callback.",
-                "chore: cherry-pick the guard from main so the release branch uses the same path for the failing mutation test.",
+                "[BE] keep parser fallback errors stable. Summary: preserve the original message when config validation retries. Test Plan: ran parser unit tests locally.",
+                "Fix stale selection after failed sync. The first render kept an old value after retry; this moves the guard earlier and adds coverage for the edge case.",
+                "Docs: clarify setup for the local cache path. The README used the old flag name, which made the example fail on a fresh checkout.",
                 "chore: make the cleanup path deterministic. This keeps deferred deletes ordered with timestamp checks and avoids a flaky teardown assertion.",
             ]
         exemplar_block = ""
@@ -1307,7 +1303,6 @@ Text:
 {context_block}{exemplar_block}{repetition_warning}{incorporate_instruction}{code_hint}
 
 Surface form for this chunk: {sf_label} (persona: {persona_label})
-- Body archetype: {archetype_label}. {archetype_instruction}
 - """ + "\n- ".join(format_hints) + """
 
 Return only the text:"""
@@ -1403,3 +1398,4 @@ class ByteLevelStegoEncoder:
                 f,
                 indent=2,
             )
+
