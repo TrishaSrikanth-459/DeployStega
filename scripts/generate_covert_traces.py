@@ -6,7 +6,7 @@ import sys
 if (
     os.environ.get("AZURE_OPENAI_API_KEY")
     and os.environ.get("AZURE_OPENAI_ENDPOINT")
-    and os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+    and (os.environ.get("AZURE_OPENAI_DEPLOYMENT") or os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME"))
 ):
     print("[INFO] Using Azure OpenAI", flush=True)
 else:
@@ -42,7 +42,7 @@ def load_azure_openai_config_from_env() -> Dict[str, str]:
     return {
         "api_key": os.environ.get("AZURE_OPENAI_API_KEY", ""),
         "endpoint": os.environ.get("AZURE_OPENAI_ENDPOINT", ""),
-        "deployment": os.environ.get("AZURE_OPENAI_DEPLOYMENT", ""),
+        "deployment": os.environ.get("AZURE_OPENAI_DEPLOYMENT") or os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", ""),
         "api_version": os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
     }
 
@@ -1160,7 +1160,7 @@ def main():
         print("ERROR: AZURE_OPENAI_ENDPOINT environment variable not set.")
         sys.exit(1)
     if not azure_openai_config["deployment"]:
-        print("ERROR: AZURE_OPENAI_DEPLOYMENT environment variable not set.")
+        print("ERROR: AZURE_OPENAI_DEPLOYMENT or AZURE_OPENAI_DEPLOYMENT_NAME environment variable not set.")
         sys.exit(1)
 
     try:
