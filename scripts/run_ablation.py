@@ -169,12 +169,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--no-structural-parity",
+        dest="no_structural_parity",
         action="store_true",
+        default=True,
         help=(
-            "Disable automatic paired structural-parity inputs. By default run_ablation "
-            "evaluates on carrier-paired benign/covert traces so epsilon is not driven "
-            "by generator artifacts such as trace length, role labels, repo namespace, "
-            "identifier distributions, or timestamp anchors."
+            "Run directly on the supplied benign/covert traces. This is the default "
+            "because structural-parity inputs are diagnostic and can mask semantic "
+            "differences if misused."
+        ),
+    )
+    parser.add_argument(
+        "--structural-parity",
+        dest="no_structural_parity",
+        action="store_false",
+        help=(
+            "Explicitly enable diagnostic paired structural-parity inputs. Do not use "
+            "for the primary semantic result unless the text-mode has been reviewed."
         ),
     )
     parser.add_argument(
@@ -572,4 +582,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

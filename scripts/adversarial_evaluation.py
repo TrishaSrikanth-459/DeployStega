@@ -591,9 +591,12 @@ def normalize_routing_record(obj: Dict[str, Any], filepath: Path, lineno: int) -
     if "epoch" not in obj and "identifier" not in obj and "url" not in obj:
         return None
 
-    role = str(obj.get("role") or "user").strip().lower()
-    if role not in {"sender", "receiver", "user"}:
-        role = "user"
+    # Strip source-only role labels for adversarial evaluation. In the raw
+    # covert files "sender"/"receiver" are experimental roles, not GitHub
+    # observations available to a detector. Leaving them visible makes role
+    # asymmetry a near-direct source label when benign files use "user" or no
+    # role at all.
+    role = "user"
 
     epoch_raw = obj.get("epoch")
     if epoch_raw is None:
@@ -635,6 +638,34 @@ def normalize_routing_record(obj: Dict[str, Any], filepath: Path, lineno: int) -
     else:
         metadata = (metadata_raw,)
 
+    semantic_text = normalize_semantic_text_for_detection(
+        obj.get("semantic_text") or obj.get("text") or obj.get("body") or obj.get("message") or obj.get("content") or obj.get("title")
+    )
+
+    action_raw = (
+        obj.get("action_type")
+        or obj.get("actionType")
+        or obj.get("event_type")
+        or obj.get("type")
+        or obj.get("action")
+    )
+    if action_raw is None:
+        # Normalize missing action fields by inferring only coarse observable
+        # GitHub activity from artifact/text presence. This avoids a source leak
+        # where benign rows without an action become "route_access" while covert
+        # rows carry explicit "edit".
+        if semantic_text:
+            if artifact_class in {"Issue", "PullRequest"}:
+                action_type = "edit"
+            elif artifact_class in {"IssueComment", "PullRequestReviewComment", "PullRequestComment", "CommitComment"}:
+                action_type = "comment"
+            else:
+                action_type = "view"
+        else:
+            action_type = "view"
+    else:
+        action_type = str(action_raw).strip() or "view"
+
     return RoutingTraceRecord(
         role=role,
         epoch=epoch,
@@ -643,15 +674,13 @@ def normalize_routing_record(obj: Dict[str, Any], filepath: Path, lineno: int) -
         url=url,
         experiment_id=str(obj["experiment_id"]) if obj.get("experiment_id") is not None else None,
         timestamp=parse_timestamp_value(obj.get("timestamp")),
-        action_type=str(obj.get("action_type") or obj.get("actionType") or obj.get("action") or "route_access").strip() or "route_access",
+        action_type=action_type,
         metadata=metadata,
-        semantic_text=normalize_semantic_text_for_detection(
-            obj.get("semantic_text") or obj.get("text") or obj.get("body") or obj.get("message") or obj.get("content") or obj.get("title")
-        ),
-        semantic_meaning=obj.get("semantic_meaning"),
-        semantic_ref=obj.get("semantic_ref"),
-        semantic_label=obj.get("semantic_label"),
-        semantic_content_type=obj.get("semantic_content_type"),
+        semantic_text=semantic_text,
+        semantic_meaning=None,
+        semantic_ref=None,
+        semantic_label=None,
+        semantic_content_type=None,
     )
 
 
@@ -1710,4 +1739,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

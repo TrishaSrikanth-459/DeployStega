@@ -135,6 +135,38 @@ def load_pr_issue_edit_text_distribution(benign_dir: str) -> Tuple[List[str], Li
     return classes, weights
 
 
+def load_benign_trace_length_distribution(benign_dir: str) -> List[int]:
+    """Return event-count support from original benign traces.
+
+    Only the count of route rows is used, not text content. Padding sender
+    traces to this support removes a trivial trace-length source leak while
+    keeping the token-binning payload and covert routing behavior intact.
+    """
+    lengths: List[int] = []
+    for fpath in sorted(Path(benign_dir).glob("user_*.jsonl")):
+        count = 0
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(event, dict) and (
+                        "epoch" in event or "identifier" in event or "url" in event
+                    ):
+                        count += 1
+        except Exception:
+            continue
+        if count > 0:
+            lengths.append(count)
+
+    return lengths
+
+
 VALID_ARTIFACT_CLASSES = {
     "Repository",
     "Issue",
@@ -783,8 +815,9 @@ def generate_receiver_trace(
     receiver_id: str,
     seed: int,
     prior: BehavioralPriorSampler,
+    total_events: int = 200,
 ) -> Optional[Path]:
-    MAX_EVENTS = 100
+    MAX_EVENTS = max(1, int(total_events))
     rng = random.Random(seed + int(secret_id) + 1000000)
 
     if feasibility_dir:
@@ -861,8 +894,8 @@ def generate_receiver_trace(
             "semantic_text": "",
             "semantic_meaning": None,
             "semantic_ref": None,
-            "semantic_label": "receiver_view",
-            "semantic_content_type": "TokenBinning_ExplicitTesting",
+            "semantic_label": "route_view",
+            "semantic_content_type": f"{routed_cls}:{action}",
             "timestamp": timestamps[i],
         }
         events.append(event)
@@ -893,6 +926,7 @@ def process_one_secret(
     seed: int,
     semantic_artifact_classes: Optional[List[str]] = None,
     semantic_artifact_weights: Optional[List[int]] = None,
+    benign_trace_lengths: Optional[List[int]] = None,
 ) -> Tuple[Optional[str], Optional[str], Dict[str, float], Dict[str, Any]]:
     metrics = Metrics()
     verification_stats: Dict[str, Any] = {
@@ -977,7 +1011,8 @@ def process_one_secret(
             print(f"  Secret {secret_id}: encoder returned 0 chunks, skipping")
             return None, None, metrics.summary(), verification_stats
 
-        MAX_EVENTS = 100
+        observed_max_events = max(benign_trace_lengths or [200])
+        MAX_EVENTS = min(max(200, observed_max_events), 240)
         if num_events > MAX_EVENTS:
             verification_stats["failure_stage"] = "encode"
             verification_stats["error_message"] = f"num_events {num_events} exceeds MAX_EVENTS {MAX_EVENTS}"
@@ -1001,9 +1036,28 @@ def process_one_secret(
         # edits). This removes source-format leakage without changing the
         # token-binning payload itself. Receiver traces still use the routed
         # artifact as the dead drop.
-        sampled_classes: List[str] = [semantic_artifact_class for _ in range(num_events)]
+        if benign_trace_lengths:
+            eligible_lengths = [n for n in benign_trace_lengths if num_events <= n <= MAX_EVENTS]
+            if eligible_lengths:
+                target_events = rng.choice(eligible_lengths)
+            else:
+                target_events = max(num_events, max(benign_trace_lengths))
+        else:
+            target_events = max(num_events, 200)
+        target_events = min(max(num_events, target_events), MAX_EVENTS)
+        verification_stats["total_events"] = target_events
 
-        timestamps = generate_sessioned_timestamps(num_events, start_time, prior)
+        sampled_classes: List[str] = []
+        prev_cls: Optional[str] = None
+        for _ in range(target_events):
+            cls = prior.sample_next_event_type(prev_cls, supported)
+            sampled_classes.append(cls)
+            prev_cls = cls
+
+        payload_positions = sorted(rng.sample(range(target_events), num_events))
+        payload_by_pos = {pos: idx for idx, pos in enumerate(payload_positions)}
+
+        timestamps = generate_sessioned_timestamps(target_events, start_time, prior)
 
         route_memory: Dict[str, List[Tuple[List[Any], str]]] = defaultdict(list)
         events: List[Dict[str, Any]] = []
@@ -1012,13 +1066,23 @@ def process_one_secret(
         fixed_url = None
         fixed_artifact_class = None
 
-        for i, chunk in enumerate(chunks):
-            action = semantic_action
+        for i in range(target_events):
+            payload_idx = payload_by_pos.get(i)
+            is_payload = payload_idx is not None
+            chunk = chunks[payload_idx] if is_payload else ""
+            action = semantic_action if is_payload else "view"
+            requested_cls = semantic_artifact_class if is_payload else sampled_classes[i]
 
-            if i == 0:
+            if is_payload and fixed_identifier is not None:
+                identifier = fixed_identifier
+                url = fixed_url
+                routed_cls = fixed_artifact_class
+                metrics.strict += 1
+                route_memory[routed_cls].append((identifier, url))
+            else:
                 identifier, url, routed_cls = choose_route_for_event(
                     epoch=i,
-                    artifact_class=sampled_classes[i],
+                    artifact_class=requested_cls,
                     role="sender",
                     strict_feasibility=strict_feasibility,
                     fallback_feasibility=fallback_feasibility,
@@ -1033,15 +1097,10 @@ def process_one_secret(
                     rng=rng,
                     metrics=metrics,
                 )
-                fixed_identifier = identifier
-                fixed_url = url
-                fixed_artifact_class = routed_cls
-            else:
-                identifier = fixed_identifier
-                url = fixed_url
-                routed_cls = fixed_artifact_class
-                metrics.strict += 1
-                route_memory[routed_cls].append((identifier, url))
+                if is_payload and fixed_identifier is None:
+                    fixed_identifier = identifier
+                    fixed_url = url
+                    fixed_artifact_class = routed_cls
 
             event = {
                 "experiment_id": f"covert_{secret_id}",
@@ -1051,11 +1110,11 @@ def process_one_secret(
                 "action": action,
                 "identifier": identifier,
                 "url": url,
-                "semantic_text": chunk,
+                "semantic_text": chunk if is_payload else "",
                 "semantic_meaning": None,
                 "semantic_ref": None,
-                "semantic_label": "explicit_testing_payload",
-                "semantic_content_type": "TokenBinning_ExplicitTesting",
+                "semantic_label": "body_edit" if is_payload else "route_view",
+                "semantic_content_type": f"{routed_cls}:{action}",
                 "timestamp": timestamps[i],
             }
             events.append(event)
@@ -1082,9 +1141,13 @@ def process_one_secret(
             receiver_id=receiver_id,
             seed=seed,
             prior=prior,
+            total_events=target_events,
         )
 
-        print(f"  Generated sender {sender_out_file} ({num_events} events) | receiver {receiver_out_file}")
+        print(
+            f"  Generated sender {sender_out_file} "
+            f"({num_events} payload events, {target_events} total events) | receiver {receiver_out_file}"
+        )
         return str(sender_out_file), str(receiver_out_file), metrics.summary(), verification_stats
 
     except Exception as e:
@@ -1215,12 +1278,21 @@ def main():
 
     if args.feasibility_dir:
         semantic_artifact_classes, semantic_artifact_weights = load_pr_issue_edit_text_distribution(args.feasibility_dir)
+        benign_trace_lengths = load_benign_trace_length_distribution(args.feasibility_dir)
     else:
         semantic_artifact_classes, semantic_artifact_weights = ["PullRequest", "Issue"], [1, 1]
+        benign_trace_lengths = []
     print(
         "Semantic payload artifact support: "
         + ", ".join(f"{cls}={weight}" for cls, weight in zip(semantic_artifact_classes, semantic_artifact_weights))
     )
+    if benign_trace_lengths:
+        sorted_lengths = sorted(benign_trace_lengths)
+        p50 = sorted_lengths[len(sorted_lengths) // 2]
+        print(
+            "Sender trace length support from benign traces: "
+            f"n={len(sorted_lengths)}, min={sorted_lengths[0]}, median={p50}, max={sorted_lengths[-1]}"
+        )
 
     secrets_dir = Path(args.secrets_dir)
     secret_files = sorted(secrets_dir.glob("*.txt"))
@@ -1390,6 +1462,7 @@ def main():
                 args.seed,
                 semantic_artifact_classes,
                 semantic_artifact_weights,
+                benign_trace_lengths,
             )
             future_map[fut] = {
                 "secret_id": secret_id,
@@ -1539,4 +1612,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
