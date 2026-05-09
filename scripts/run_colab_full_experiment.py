@@ -504,8 +504,8 @@ def main() -> None:
             "--num-traces", str(args.smoke_traces),
             "--workers", "1",
             "--seed", "123",
-            "--max-secret-chunks", "20",
-            "--estimated-bytes-per-chunk", "12",
+            "--max-secret-chunks", "40",
+            "--estimated-bytes-per-chunk", "2",
         ], cwd=root, log_path=log_dir / "01_smoke_generation.log")
 
         smoke_summary = json.loads((smoke_dir / "generation_summary.json").read_text())
@@ -552,8 +552,8 @@ def main() -> None:
             "--num-traces", str(args.target_traces),
             "--workers", str(args.workers),
             "--seed", "42",
-            "--estimated-bytes-per-chunk", "12",
-            "--min-secret-keep-rate", "0.95",
+            "--max-secret-chunks", "100",
+            "--estimated-bytes-per-chunk", "2",
         ], cwd=root, log_path=log_dir / "02_full_generation.log")
 
         run([
