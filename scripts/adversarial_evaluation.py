@@ -28,6 +28,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import sys
 import warnings
 from datetime import datetime, timezone
@@ -644,7 +645,9 @@ def normalize_routing_record(obj: Dict[str, Any], filepath: Path, lineno: int) -
         timestamp=parse_timestamp_value(obj.get("timestamp")),
         action_type=str(obj.get("action_type") or obj.get("actionType") or obj.get("action") or "route_access").strip() or "route_access",
         metadata=metadata,
-        semantic_text=obj.get("semantic_text"),
+        semantic_text=normalize_semantic_text_for_detection(
+            obj.get("semantic_text") or obj.get("text") or obj.get("body") or obj.get("message") or obj.get("content") or obj.get("title")
+        ),
         semantic_meaning=obj.get("semantic_meaning"),
         semantic_ref=obj.get("semantic_ref"),
         semantic_label=obj.get("semantic_label"),
@@ -1160,11 +1163,124 @@ class BERTSemanticClassifier:
         tokenizer.save_pretrained(path)
 
 
+SOURCE_LEAK_LINE_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"^\s*Pull Request resolved\s*:",
+        r"^\s*Approved by\s*:",
+        r"^\s*Reviewed By\s*:",
+        r"^\s*Differential Revision\s*:",
+        r"^\s*Source-Id\s*:",
+        r"^\s*ghstack-source-id\s*:",
+        r"^\s*Stack from\s*:",
+        r"^\s*Co-authored-by\s*:",
+        r"^\s*Details\s*:\s*https?://",
+        r"^\s*<!--\s*(start|end)_[^>]+-->\s*$",
+        r"^\s*<!---?\s*Backport version\s*:",
+        r"^\s*###\s*Questions\s*\?\s*$",
+        r"^\s*Please refer to the .*documentation\s*$",
+    )
+]
+
+SOURCE_LEAK_HEADING_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"^\s*#+\s*[*_\s]*(Description|Related issues|Manual testing steps|Screenshots/Recordings|Pre-merge author checklist|Pre-merge reviewer checklist|Testing|Test plan|Checklist|Tagging|Tip:.*)[*_\s]*:??\s*$",
+        r"^\s*[*_\s]*(Description|Related issues|Manual testing steps|Screenshots/Recordings|Pre-merge author checklist|Pre-merge reviewer checklist|Testing|Test plan|Checklist|Tagging|Tip:.*)[*_\s]*:??\s*$",
+    )
+]
+
+SOURCE_LEAK_SECTION_START_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"^\s*#+\s*[*_\s]*(Pre-merge author checklist|Pre-merge reviewer checklist|Screenshots/Recordings|Related issues|Manual testing steps|Checklist|Tagging|Tip:.*)[*_\s]*:??\s*$",
+        r"^\s*[*_\s]*(Pre-merge author checklist|Pre-merge reviewer checklist|Screenshots/Recordings|Related issues|Manual testing steps|Checklist|Tagging|Tip:.*)[*_\s]*:??\s*$",
+    )
+]
+
+
+def normalize_semantic_text_for_detection(text: Any) -> str:
+    """Remove dataset-source formatting cues while preserving developer prose.
+
+    This is deliberately symmetric for benign and covert text. It removes
+    transport/import artifacts (URLs, emails, PR bot footers, markdown template
+    scaffolding, code fences, checklist markers, and excessive whitespace) that
+    make the detector learn the corpus source rather than semantic content.
+    """
+    if text is None:
+        return ""
+    text = str(text).replace("\x00", "")
+    if not text.strip():
+        return ""
+
+    # Remove HTML comments/template blocks that commonly come from imported PR
+    # templates rather than user-authored content.
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+
+    # Markdown links keep their label; bare URLs/emails are source artifacts.
+    text = re.sub(r"\[([^\]]+)\]\((?:https?://|mailto:)[^)]+\)", r"\1", text)
+    text = re.sub(r"https?://\S+|github\.com/\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", " ", text)
+
+    cleaned_lines: List[str] = []
+    in_fence = False
+    skip_template_section = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        line_for_heading = re.sub(r"[*_`]+", "", line).strip()
+
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            # Drop fenced payloads; they are often logs/tables/templates and
+            # are not comparable to generated one-paragraph covert notes.
+            continue
+
+        if any(p.search(line_for_heading) for p in SOURCE_LEAK_SECTION_START_PATTERNS):
+            skip_template_section = True
+            continue
+
+        if any(p.search(line_for_heading) for p in SOURCE_LEAK_HEADING_PATTERNS):
+            # Description/Test-plan headings are scaffolding; their following
+            # prose can still be substantive, so do not enable section skipping.
+            skip_template_section = False
+            continue
+
+        if re.match(r"^\s*#+\s+", line):
+            skip_template_section = False
+
+        if skip_template_section:
+            continue
+
+        if any(p.search(line) for p in SOURCE_LEAK_LINE_PATTERNS):
+            continue
+
+        # Strip markdown/list/checklist/table syntax without deleting content.
+        line = re.sub(r"^\s*[-*+]\s+(?:\[[ xX]\]\s*)?", "", line)
+        line = re.sub(r"^\s*\d+[.)]\s+", "", line)
+        line = re.sub(r"^\s*#+\s*", "", line)
+        line = line.replace("`", "")
+        line = line.replace("|", " ")
+        line = re.sub(r"[*_]{1,3}([^*_]+)[*_]{1,3}", r"\1", line)
+        line = re.sub(r"[-=]{5,}", " ", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            cleaned_lines.append(line)
+
+    normalized = " ".join(cleaned_lines)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
 def text_from_event(event: Dict[str, Any]) -> str:
     for key in ("semantic_text", "text", "body", "message", "content", "title"):
         value = event.get(key)
         if value is not None and str(value).strip():
-            return str(value).strip()
+            return normalize_semantic_text_for_detection(value)
     return ""
 
 

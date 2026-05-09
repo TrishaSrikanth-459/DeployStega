@@ -89,6 +89,52 @@ def load_repo_distribution(benign_dir: str) -> Tuple[List[Tuple[str, str]], List
     return repos, weights
 
 
+TEXT_KEYS = ("semantic_text", "text", "body", "message", "content", "title")
+
+
+def event_has_text(event: Dict[str, Any]) -> bool:
+    for key in TEXT_KEYS:
+        value = event.get(key)
+        if value is not None and str(value).strip():
+            return True
+    return False
+
+
+def load_pr_issue_edit_text_distribution(benign_dir: str) -> Tuple[List[str], List[int]]:
+    """Return high-level text-bearing artifact support from benign traces.
+
+    We use only the artifact/action support counts, not benign text content. This
+    avoids source leakage where covert semantic payloads appear mostly on Commit
+    view events while benign text-bearing payloads appear on Issue/PullRequest
+    edit events. The token-binning payload and generated wording remain covert.
+    """
+    counts: Counter[str] = Counter()
+    for fpath in sorted(Path(benign_dir).glob("user_*.jsonl")):
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    artifact_class = str(event.get("artifact_class") or event.get("artifactClass") or "")
+                    action = str(event.get("action") or event.get("action_type") or event.get("event_type") or "")
+                    if artifact_class in {"PullRequest", "Issue"} and action == "edit" and event_has_text(event):
+                        counts[artifact_class] += 1
+        except Exception:
+            continue
+
+    if not counts:
+        return ["PullRequest", "Issue"], [1, 1]
+
+    classes = [cls for cls, _ in counts.most_common()]
+    weights = [counts[cls] for cls in classes]
+    return classes, weights
+
+
 VALID_ARTIFACT_CLASSES = {
     "Repository",
     "Issue",
@@ -684,6 +730,7 @@ def encode_secret_message_in_worker(
     action: str,
     azure_openai_config: Dict[str, str],
     positions_filename: Optional[str] = None,
+    context_extra: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[str], Optional[str]]:
     os.environ["AZURE_OPENAI_API_KEY"] = azure_openai_config["api_key"]
     os.environ["AZURE_OPENAI_ENDPOINT"] = azure_openai_config["endpoint"]
@@ -696,6 +743,8 @@ def encode_secret_message_in_worker(
         "artifact_class": artifact_class,
         "action": action,
     }
+    if context_extra:
+        context.update(context_extra)
 
     encoder = ByteLevelStegoEncoder(quiet=False)
     chunks = encoder.encode(secret_message, context, positions_filename=positions_filename)
@@ -842,6 +891,8 @@ def process_one_secret(
     owner: str,
     repo: str,
     seed: int,
+    semantic_artifact_classes: Optional[List[str]] = None,
+    semantic_artifact_weights: Optional[List[int]] = None,
 ) -> Tuple[Optional[str], Optional[str], Dict[str, float], Dict[str, Any]]:
     metrics = Metrics()
     verification_stats: Dict[str, Any] = {
@@ -887,12 +938,34 @@ def process_one_secret(
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
             positions_file = tmp.name
 
+        semantic_artifact_classes = semantic_artifact_classes or ["PullRequest", "Issue"]
+        semantic_artifact_weights = semantic_artifact_weights or [1 for _ in semantic_artifact_classes]
+        semantic_candidates = [
+            (cls, weight)
+            for cls, weight in zip(semantic_artifact_classes, semantic_artifact_weights)
+            if cls in supported
+        ]
+        if not semantic_candidates:
+            fallback_classes = [cls for cls in ("PullRequest", "Issue") if cls in supported]
+            if not fallback_classes:
+                fallback_classes = [supported[0]]
+            semantic_candidates = [(cls, 1) for cls in fallback_classes]
+
+        semantic_classes = [cls for cls, _ in semantic_candidates]
+        semantic_weights = [max(1, int(weight)) for _, weight in semantic_candidates]
+        semantic_artifact_class = rng.choices(semantic_classes, weights=semantic_weights, k=1)[0]
+        semantic_action = "edit" if semantic_artifact_class in {"PullRequest", "Issue"} else "comment"
+
         chunks = encode_secret_message_in_worker(
             secret_message=secret_text,
-            artifact_class="Issue",
-            action="view",
+            artifact_class=semantic_artifact_class,
+            action=semantic_action,
             azure_openai_config=azure_openai_config,
             positions_filename=positions_file,
+            context_extra={
+                "repo_owner": owner,
+                "repo_name": repo,
+            },
         )[0]
 
         num_events = len(chunks)
@@ -923,12 +996,12 @@ def process_one_secret(
 
         print(f"  Verification PASSED for secret {secret_id}")
 
-        sampled_classes: List[str] = []
-        prev_cls: Optional[str] = None
-        for _ in range(num_events):
-            cls = prior.sample_next_event_type(prev_cls, supported)
-            sampled_classes.append(cls)
-            prev_cls = cls
+        # Semantic payload events are intentionally placed on the same
+        # high-level support as benign text-bearing events (Issue/PullRequest
+        # edits). This removes source-format leakage without changing the
+        # token-binning payload itself. Receiver traces still use the routed
+        # artifact as the dead drop.
+        sampled_classes: List[str] = [semantic_artifact_class for _ in range(num_events)]
 
         timestamps = generate_sessioned_timestamps(num_events, start_time, prior)
 
@@ -940,11 +1013,7 @@ def process_one_secret(
         fixed_artifact_class = None
 
         for i, chunk in enumerate(chunks):
-            action = "view"
-            if "Comment" in sampled_classes[i]:
-                action = "comment"
-            elif sampled_classes[i] in ("Issue", "PullRequest"):
-                action = "edit"
+            action = semantic_action
 
             if i == 0:
                 identifier, url, routed_cls = choose_route_for_event(
@@ -1069,7 +1138,7 @@ def main():
                         help="Optional manual override. If omitted, script auto-selects the smallest threshold that keeps at least min-secret-keep-rate of non-empty secrets.")
     parser.add_argument("--estimated-bytes-per-chunk", type=int, default=12,
                         help="Estimated payload bytes carried per chunk for pre-filtering secrets")
-    parser.add_argument("--min-secret-keep-rate", type=float, default=0.90,
+    parser.add_argument("--min-secret-keep-rate", type=float, default=0.95,
                         help="Minimum fraction of non-empty secrets the auto-selected max-secret-chunks must retain")
     args = parser.parse_args()
 
@@ -1143,6 +1212,15 @@ def main():
         repo_weights = [1]
         print(f"No benign trace dir provided; using single snapshot repo {owner}/{repo}")
         print("No feasibility directory provided; primary feasibility defaults to AllowAllFeasibilityRegion")
+
+    if args.feasibility_dir:
+        semantic_artifact_classes, semantic_artifact_weights = load_pr_issue_edit_text_distribution(args.feasibility_dir)
+    else:
+        semantic_artifact_classes, semantic_artifact_weights = ["PullRequest", "Issue"], [1, 1]
+    print(
+        "Semantic payload artifact support: "
+        + ", ".join(f"{cls}={weight}" for cls, weight in zip(semantic_artifact_classes, semantic_artifact_weights))
+    )
 
     secrets_dir = Path(args.secrets_dir)
     secret_files = sorted(secrets_dir.glob("*.txt"))
@@ -1310,6 +1388,8 @@ def main():
                 sampled_owner,
                 sampled_repo,
                 args.seed,
+                semantic_artifact_classes,
+                semantic_artifact_weights,
             )
             future_map[fut] = {
                 "secret_id": secret_id,
