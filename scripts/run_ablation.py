@@ -119,7 +119,7 @@ def parse_args() -> argparse.Namespace:
         "--user-key",
         type=str,
         default="role",
-        help="How to group records into traces for behavioral features (supported: role, role_epoch)",
+        help="How to group records into traces for behavioral features (supported: role, role_epoch, none)",
     )
     parser.add_argument(
         "--group-key",

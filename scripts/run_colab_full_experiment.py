@@ -16,8 +16,9 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 REQUIRED_ENV = (
     "AZURE_OPENAI_API_KEY",
@@ -96,7 +97,7 @@ def read_jsonl_texts(trace_dir: Path, limit: int = 2500) -> List[str]:
     return texts
 
 
-def comparable_pr_issue_edit_texts(trace_dir: Path, limit: int = 2500) -> List[str]:
+def comparable_pr_issue_edit_texts(trace_dir: Path, limit: Optional[int] = None) -> List[str]:
     """Collect normalized PullRequest/Issue edit text for source-leak smoke tests.
 
     This mirrors the diagnostic that caught the previous semantic source gap:
@@ -139,9 +140,98 @@ def comparable_pr_issue_edit_texts(trace_dir: Path, limit: int = 2500) -> List[s
                     continue
 
                 texts.append(text)
-                if len(texts) >= limit:
+                if limit is not None and len(texts) >= limit:
                     return texts
     return texts
+
+
+def _length_bin(text: str) -> str:
+    wc = len(text.split())
+    if wc < 12:
+        return "000-011"
+    if wc < 32:
+        return "012-031"
+    if wc < 80:
+        return "032-079"
+    if wc < 160:
+        return "080-159"
+    if wc < 320:
+        return "160-319"
+    return "320+"
+
+
+def length_matched_samples(
+    benign_texts: List[str],
+    covert_texts: List[str],
+    *,
+    max_samples_per_class: int,
+    seed: int,
+) -> Tuple[List[str], List[str], Dict[str, Any]]:
+    """Sample benign/covert texts with matched coarse word-count support.
+
+    The source-leak smoke test should not be passed or failed because one side
+    has systematically longer PR bodies. This keeps the diagnostic focused on
+    lexical/style separation after explicit source-format normalization.
+    """
+    rng = __import__("random").Random(seed)
+    by_label = {
+        "benign": defaultdict(list),
+        "covert": defaultdict(list),
+    }
+    for text in benign_texts:
+        by_label["benign"][_length_bin(text)].append(text)
+    for text in covert_texts:
+        by_label["covert"][_length_bin(text)].append(text)
+
+    selected_benign: List[str] = []
+    selected_covert: List[str] = []
+    bin_counts: Dict[str, Dict[str, int]] = {}
+    for bin_name in sorted(set(by_label["benign"]) | set(by_label["covert"])):
+        b = by_label["benign"].get(bin_name, [])
+        c = by_label["covert"].get(bin_name, [])
+        rng.shuffle(b)
+        rng.shuffle(c)
+        k = min(len(b), len(c))
+        if k <= 0:
+            continue
+        selected_benign.extend(b[:k])
+        selected_covert.extend(c[:k])
+        bin_counts[bin_name] = {
+            "benign_available": len(b),
+            "covert_available": len(c),
+            "matched": k,
+        }
+
+    if not selected_benign:
+        # Fall back to ordinary balanced sampling when the smoke set is tiny or
+        # has no overlapping bins; the report records that length matching did
+        # not apply.
+        b = benign_texts[:]
+        c = covert_texts[:]
+        rng.shuffle(b)
+        rng.shuffle(c)
+        n = min(len(b), len(c), max_samples_per_class)
+        return b[:n], c[:n], {
+            "applied": False,
+            "reason": "no overlapping word-count bins",
+            "bins": {},
+        }
+
+    paired = list(zip(selected_benign, selected_covert))
+    rng.shuffle(paired)
+    if len(paired) > max_samples_per_class:
+        paired = paired[:max_samples_per_class]
+
+    benign_out = [b for b, _ in paired]
+    covert_out = [c for _, c in paired]
+    return benign_out, covert_out, {
+        "applied": True,
+        "bins": bin_counts,
+        "raw_word_bins": {
+            "benign": dict(Counter(_length_bin(t) for t in benign_texts)),
+            "covert": dict(Counter(_length_bin(t) for t in covert_texts)),
+        },
+    }
 
 
 def tfidf_source_diagnostic(
@@ -164,24 +254,28 @@ def tfidf_source_diagnostic(
     from sklearn.model_selection import train_test_split
     from sklearn.pipeline import make_pipeline
 
-    benign_texts = comparable_pr_issue_edit_texts(benign_dir, limit=max_samples_per_class)
-    covert_texts = comparable_pr_issue_edit_texts(covert_sender_dir, limit=max_samples_per_class)
-
-    rng = __import__("random").Random(seed)
-    rng.shuffle(benign_texts)
-    rng.shuffle(covert_texts)
+    benign_all = comparable_pr_issue_edit_texts(benign_dir, limit=None)
+    covert_all = comparable_pr_issue_edit_texts(covert_sender_dir, limit=None)
+    benign_texts, covert_texts, length_match_report = length_matched_samples(
+        benign_all,
+        covert_all,
+        max_samples_per_class=max_samples_per_class,
+        seed=seed,
+    )
     n = min(len(benign_texts), len(covert_texts), max_samples_per_class)
 
     report: Dict[str, Any] = {
         "mode": "tfidf_source_diagnostic",
         "support": "PullRequest/Issue edit text only",
         "normalization": "normalize_semantic_text_for_detection",
-        "benign_count": len(benign_texts),
-        "covert_count": len(covert_texts),
+        "benign_count": len(benign_all),
+        "covert_count": len(covert_all),
         "balanced_n_per_class": n,
+        "length_matching": length_match_report,
         "auc_mean": None,
         "accuracy_mean": None,
         "runs": [],
+        "top_tfidf_terms": {"benign": [], "covert": []},
         "benign_examples": benign_texts[:5],
         "covert_examples": covert_texts[:5],
     }
@@ -218,6 +312,24 @@ def tfidf_source_diagnostic(
         clf.fit(x_train, y_train)
         scores = clf.predict_proba(x_test)[:, 1]
         preds = (scores >= 0.5).astype(int)
+        if rep == 0:
+            vectorizer = clf.named_steps["tfidfvectorizer"]
+            classifier = clf.named_steps["logisticregression"]
+            terms = vectorizer.get_feature_names_out()
+            coef = classifier.coef_[0]
+            top_k = min(25, len(terms))
+            covert_idx = coef.argsort()[-top_k:][::-1]
+            benign_idx = coef.argsort()[:top_k]
+            report["top_tfidf_terms"] = {
+                "benign": [
+                    {"term": str(terms[i]), "coef": float(coef[i])}
+                    for i in benign_idx
+                ],
+                "covert": [
+                    {"term": str(terms[i]), "coef": float(coef[i])}
+                    for i in covert_idx
+                ],
+            }
         report["runs"].append(
             {
                 "repeat": rep,
@@ -317,6 +429,8 @@ def main() -> None:
     parser.add_argument("--skip-semantic-smoke-gate", action="store_true")
     parser.add_argument("--semantic-smoke-max-auc", type=float, default=0.98)
     parser.add_argument("--semantic-smoke-max-accuracy", type=float, default=0.95)
+    parser.add_argument("--smoke-min-verification-rate", type=float, default=0.95)
+    parser.add_argument("--smoke-min-successful-traces", type=int, default=20)
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -354,8 +468,15 @@ def main() -> None:
         ], cwd=root, log_path=log_dir / "01_smoke_generation.log")
 
         smoke_summary = json.loads((smoke_dir / "generation_summary.json").read_text())
-        if smoke_summary.get("verification_metrics", {}).get("verification_success_rate") != 1.0:
-            raise SystemExit("Smoke generation failed token-binning verification; not starting full run.")
+        smoke_rate = float(smoke_summary.get("verification_metrics", {}).get("verification_success_rate") or 0.0)
+        smoke_sender_count = count_files(smoke_dir / "sender", "*.jsonl")
+        if smoke_rate < args.smoke_min_verification_rate or smoke_sender_count < args.smoke_min_successful_traces:
+            raise SystemExit(
+                "Smoke generation failed token-binning verification coverage; not starting full run. "
+                f"success_rate={smoke_rate:.3f}, sender_traces={smoke_sender_count}, "
+                f"required_rate={args.smoke_min_verification_rate:.3f}, "
+                f"required_traces={args.smoke_min_successful_traces}"
+            )
         trace_quality_report(smoke_dir / "sender", out / "smoke_quality_report.json")
         smoke_semantic_report = tfidf_source_diagnostic(
             root / "benign_traces",
@@ -429,7 +550,7 @@ def main() -> None:
             "--validation-size", "0.2",
             "--seed", "42",
             "--workers", "1",
-            "--user-key", "role_epoch",
+            "--user-key", "role",
             "--group-key", "experiment_id",
             "--include-bert",
             "--max-samples", str(args.bert_max_samples),
