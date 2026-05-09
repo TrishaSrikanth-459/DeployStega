@@ -121,8 +121,10 @@ def load_pr_issue_edit_text_distribution(benign_dir: str) -> Tuple[List[str], Li
                     except Exception:
                         continue
                     artifact_class = str(event.get("artifact_class") or event.get("artifactClass") or "")
-                    action = str(event.get("action") or event.get("action_type") or event.get("event_type") or "")
-                    if artifact_class in {"PullRequest", "Issue"} and action == "edit" and event_has_text(event):
+                    action_raw = event.get("action") or event.get("action_type") or event.get("event_type")
+                    has_text = event_has_text(event)
+                    action = str(action_raw).strip().lower() if action_raw else ("edit" if has_text else "view")
+                    if artifact_class in {"PullRequest", "Issue"} and action == "edit" and has_text:
                         counts[artifact_class] += 1
         except Exception:
             continue

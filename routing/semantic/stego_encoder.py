@@ -194,9 +194,10 @@ BODY_ARCHETYPES: List[Dict[str, str]] = [
     {
         "label": "fix_pr",
         "instruction": (
-            "Use the shape of a concise fix PR body: a short title-like clause, "
-            "then one paragraph explaining what changed and why. If tests fit, "
-            "add a compact 'Test Plan:' clause in the same paragraph."
+            "Use the shape of a concise fix PR body: optionally start with a "
+            "short conventional prefix such as fix:, feat:, docs:, chore:, or "
+            "test:, then one paragraph explaining what changed and why. If "
+            "tests fit, add a compact 'Test Plan:' clause in the same paragraph."
         ),
     },
     {
@@ -232,6 +233,22 @@ BODY_ARCHETYPES: List[Dict[str, str]] = [
         "instruction": (
             "Use the shape of an update after review: say what feedback was addressed, "
             "which edge case changed, and how it was checked."
+        ),
+    },
+    {
+        "label": "compiler_style_note",
+        "instruction": (
+            "Use the shape of a terse project-maintainer note: a bracketed or "
+            "prefix-style area label is allowed, followed by the exact behavior "
+            "change and one validation detail. Keep it concrete, not polished."
+        ),
+    },
+    {
+        "label": "bugfix_with_test_plan",
+        "instruction": (
+            "Use the shape of a bugfix PR body with a compact Summary and Test "
+            "Plan written inline. Avoid generic words like 'enhance' unless the "
+            "change is actually broad."
         ),
     },
 ]
@@ -959,9 +976,10 @@ Text:
         def _call_model(prompt_text: str, system_addendum: str) -> str:
             system_content = (
                 "You are editing a GitHub Pull Request or Issue body. Match real PR/issue body style: "
-                "a compact title-like clause plus practical rationale, repro, summary, or test-plan detail. "
-                "Avoid the over-polished release-note pattern where every sentence starts with 'The' "
-                "and repeats words like now/updates/handling; vary openings naturally. "
+                "a compact title-like clause, bug report update, review follow-up, or practical test-plan note. "
+                "It is okay to sound slightly terse, local, or maintainer-like. Avoid the over-polished "
+                "release-note pattern where every sentence starts with 'The' and repeats words like "
+                "now/updates/handling; vary openings naturally. "
                 "Do not add raw URLs, approval footers, emails, markdown tables, checklists, or code fences. "
                 "Avoid dumping identifiers as a bare checklist, code fence, or sentence-opening token run. "
                 "Some required tokens may be code identifiers such as method names, dotted "
@@ -1204,9 +1222,10 @@ Text:
         # contaminating the comparison while still discouraging token inventories.
         if not exemplars:
             exemplars = [
-                "[BE] keep parser fallback errors stable. Summary: preserve the original message when config validation retries. Test Plan: ran parser unit tests locally.",
+                "fix: keep parser fallback errors stable. Summary: preserve the original message when config validation retries. Test Plan: ran parser unit tests locally.",
                 "Fix stale selection after failed sync. The first render kept an old value after retry; this moves the guard earlier and adds coverage for the edge case.",
-                "Docs: clarify setup for the local cache path. The README used the old flag name, which made the example fail on a fresh checkout.",
+                "docs: clarify setup for the local cache path. The README used the old flag name, which made the example fail on a fresh checkout.",
+                "[compiler] keep the alternate pipeline behind the existing guard. This avoids changing the default path and keeps the failing case covered by the regression test.",
                 "chore: make the cleanup path deterministic. This keeps deferred deletes ordered with timestamp checks and avoids a flaky teardown assertion.",
             ]
         exemplar_block = ""
@@ -1284,6 +1303,11 @@ Text:
             format_hints.append(
                 f"Write {sentence_min}-{sentence_max} sentences as prose. No bullets, no fenced code blocks."
             )
+        format_hints.append(
+            "Use concrete developer wording: mention the failing path, changed guard, test, docs wording, "
+            "or rollout concern. Avoid generic generated phrases like 'improves robustness', 'streamlines', "
+            "or 'enhances handling' unless supported by a specific detail."
+        )
         if not force_period:
             format_hints.append("It is fine if the note does not end in a period.")
         else:
@@ -1303,6 +1327,7 @@ Text:
 {context_block}{exemplar_block}{repetition_warning}{incorporate_instruction}{code_hint}
 
 Surface form for this chunk: {sf_label} (persona: {persona_label})
+- Body archetype: {archetype_label}. {archetype_instruction}
 - """ + "\n- ".join(format_hints) + """
 
 Return only the text:"""
@@ -1398,4 +1423,3 @@ class ByteLevelStegoEncoder:
                 f,
                 indent=2,
             )
-

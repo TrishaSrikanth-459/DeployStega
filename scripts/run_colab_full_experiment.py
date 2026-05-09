@@ -75,6 +75,35 @@ def assert_env() -> None:
         os.environ["AZURE_OPENAI_DEPLOYMENT"] = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
 
 
+def build_semantic_calibration(
+    root: Path,
+    out: Path,
+    log_dir: Path,
+    calibration_files: int,
+    seed: int,
+) -> Path:
+    """Create held-out benign style exemplars and return the eval benign dir."""
+    cal_dir = out / "semantic_style_calibration"
+    eval_dir = cal_dir / "benign_eval_traces"
+    exemplars_path = cal_dir / "semantic_style_exemplars.jsonl"
+    manifest_path = cal_dir / "semantic_calibration_manifest.json"
+
+    run([
+        sys.executable, "scripts/build_semantic_calibration.py",
+        "--benign-dir", "benign_traces",
+        "--eval-dir", str(eval_dir),
+        "--exemplars-path", str(exemplars_path),
+        "--manifest-path", str(manifest_path),
+        "--calibration-files", str(calibration_files),
+        "--seed", str(seed),
+    ], cwd=root, log_path=log_dir / "00_semantic_calibration.log")
+
+    os.environ["STEGO_BENIGN_EXEMPLARS_PATH"] = str(exemplars_path)
+    print(f"Using held-out semantic style exemplars: {exemplars_path}")
+    print(f"Using benign evaluation traces excluding calibration files: {eval_dir}")
+    return eval_dir
+
+
 def read_jsonl_texts(trace_dir: Path, limit: int = 2500) -> List[str]:
     texts: List[str] = []
     keys = ("semantic_text", "text", "body", "message", "content", "title")
@@ -426,6 +455,8 @@ def main() -> None:
     parser.add_argument("--skip-ablation", action="store_true")
     parser.add_argument("--bert-epochs", type=int, default=3)
     parser.add_argument("--bert-max-samples", type=int, default=10000)
+    parser.add_argument("--disable-style-calibration", action="store_true")
+    parser.add_argument("--style-calibration-files", type=int, default=200)
     parser.add_argument("--skip-semantic-smoke-gate", action="store_true")
     parser.add_argument("--semantic-smoke-max-auc", type=float, default=0.98)
     parser.add_argument("--semantic-smoke-max-accuracy", type=float, default=0.95)
@@ -446,6 +477,16 @@ def main() -> None:
     print(f"output={out}")
     print(f"deployment={os.environ.get('AZURE_OPENAI_DEPLOYMENT') or os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME')}")
     print(f"api_version={os.environ.get('AZURE_OPENAI_API_VERSION')}")
+
+    benign_eval_dir = root / "benign_traces"
+    if not args.disable_style_calibration:
+        benign_eval_dir = build_semantic_calibration(
+            root=root,
+            out=out,
+            log_dir=log_dir,
+            calibration_files=args.style_calibration_files,
+            seed=20260509,
+        )
 
     smoke_dir = out / "smoke_traces"
     full_dir = out / "covert_traces_full"
@@ -477,7 +518,7 @@ def main() -> None:
         # the source-leak diagnostic from being written.
         trace_quality_report(smoke_dir / "sender", out / "smoke_quality_report.json")
         smoke_semantic_report = tfidf_source_diagnostic(
-            root / "benign_traces",
+            benign_eval_dir,
             smoke_dir / "sender",
             out / "smoke_semantic_source_diagnostic.json",
             max_samples_per_class=2500,
@@ -528,7 +569,7 @@ def main() -> None:
 
     trace_quality_report(full_dir / "sender", out / "full_quality_report.json")
     full_semantic_report = tfidf_source_diagnostic(
-        root / "benign_traces",
+        benign_eval_dir,
         full_dir / "sender",
         out / "full_semantic_source_diagnostic.json",
         max_samples_per_class=2500,
@@ -547,7 +588,7 @@ def main() -> None:
         ablation_out = out / "ablation_results"
         run([
             sys.executable, "scripts/run_ablation.py",
-            "--benign-dir", "benign_traces",
+            "--benign-dir", str(benign_eval_dir),
             "--covert-dir", str(full_dir / "sender"),
             "--manifest", "experiments/experiment_manifest.json",
             "--output-root", str(ablation_out),
