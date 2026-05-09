@@ -496,36 +496,6 @@ class ByteLevelSemanticEncoder:
         lo_p, hi_p = SAMPLING_BAND["top_p"]
         return rng.uniform(lo_t, hi_t), rng.uniform(lo_p, hi_p)
 
-    @staticmethod
-    def _sample_target_word_count(
-        context: Dict[str, Any],
-        rng: random.Random,
-        required_word_count: int,
-    ) -> int:
-        """Sample a coarse benign-style target length from aggregate stats only."""
-        profile = context.get("semantic_style_profile") or {}
-        quantiles = profile.get("word_quantiles") if isinstance(profile, dict) else {}
-        if not isinstance(quantiles, dict):
-            quantiles = {}
-
-        p10 = int(quantiles.get("p10", 35) or 35)
-        p25 = int(quantiles.get("p25", 55) or 55)
-        p50 = int(quantiles.get("p50", 90) or 90)
-        p75 = int(quantiles.get("p75", 150) or 150)
-        p90 = int(quantiles.get("p90", 240) or 240)
-
-        # Keep enough surrounding prose for forced tokens to stop looking like
-        # a token inventory, but cap for cost/latency and the ~1000-token budget.
-        minimum = max(28, required_word_count * 8)
-        if rng.random() < 0.18:
-            target = rng.randint(max(minimum, p10), max(minimum, p90))
-        else:
-            low = max(minimum, min(p25, p50))
-            high = max(low, p75)
-            mode = max(low, min(p50, high))
-            target = int(rng.triangular(low, high, mode))
-        return max(minimum, min(target, 260))
-
     def encode_message(self, message: str, context: Dict[str, Any]) -> tuple[list[Any], list[Any]]:
         if not self.quiet:
             print(f"\nBYTE-LEVEL ENCODING: {message!r}")
@@ -971,12 +941,6 @@ Text:
         body_archetype = self._pick_body_archetype(chunk_rng)
         exemplars = self._pick_exemplars(chunk_rng, artifact_class, k=2)
         temperature, top_p = self._sample_temperature(chunk_rng)
-        context_for_prompt = dict(context)
-        context_for_prompt["target_word_count"] = self._sample_target_word_count(
-            context=context,
-            rng=chunk_rng,
-            required_word_count=len(required_words),
-        )
 
         prompt = self._build_byte_prompt(
             artifact_type=artifact_type_desc,
@@ -985,7 +949,7 @@ Text:
             is_comment=is_comment,
             required_words=required_words,
             previous_stegotexts=previous_stegotexts,
-            context=context_for_prompt,
+            context=context,
             exemplars=exemplars,
             persona_label=persona_label,
             surface_form=surface_form,
@@ -996,13 +960,9 @@ Text:
             system_content = (
                 "You are editing a GitHub Pull Request or Issue body. Match real PR/issue body style: "
                 "a compact title-like clause plus practical rationale, repro, summary, or test-plan detail. "
-                "Vary between issue-report, fix-summary, docs, CI, and maintenance voices. "
                 "Avoid the over-polished release-note pattern where every sentence starts with 'The' "
                 "and repeats words like now/updates/handling; vary openings naturally. "
-                "Avoid stock generated endings such as repeatedly saying 'Verified by running' unless a "
-                "specific test note naturally belongs. "
                 "Do not add raw URLs, approval footers, emails, markdown tables, checklists, or code fences. "
-                "Do not add PR numbers, issue IDs, commit hashes, bot footers, or copied project metadata. "
                 "Avoid dumping identifiers as a bare checklist, code fence, or sentence-opening token run. "
                 "Some required tokens may be code identifiers such as method names, dotted "
                 "paths, or identifiers with underscores. Preserve those character-for-character "
@@ -1244,12 +1204,10 @@ Text:
         # contaminating the comparison while still discouraging token inventories.
         if not exemplars:
             exemplars = [
-                "Keep parser fallback errors stable. Summary: preserve the original message when config validation retries so callers see the same failure that reached the parser. Test Plan: ran the parser unit tests and checked the retry branch with a malformed config.",
-                "Fix stale selection after failed sync. The first render kept an old value after retry, which made the detail pane look successful even though the write had been rejected. This moves the guard earlier and adds coverage for the edge case.",
-                "Docs: clarify setup for the local cache path. The README used the old flag name, which made the example fail on a fresh checkout. I updated the wording and added a short note about where the cache directory is created.",
-                "Make the cleanup path deterministic. Deferred deletes can currently race with timestamp checks during teardown, so this keeps the ordering explicit and avoids the flaky assertion we were seeing in the service test.",
-                "Handle the empty-state report more consistently. When the request returns no rows, the UI should keep the existing filter state but show the inline empty message instead of resetting the whole panel.",
-                "Tighten the regression test around the retry path. The previous assertion only checked that the call completed; this now verifies the fallback value and the warning message so future changes do not silently skip the guard.",
+                "[BE] keep parser fallback errors stable. Summary: preserve the original message when config validation retries. Test Plan: ran parser unit tests locally.",
+                "Fix stale selection after failed sync. The first render kept an old value after retry; this moves the guard earlier and adds coverage for the edge case.",
+                "Docs: clarify setup for the local cache path. The README used the old flag name, which made the example fail on a fresh checkout.",
+                "chore: make the cleanup path deterministic. This keeps deferred deletes ordered with timestamp checks and avoids a flaky teardown assertion.",
             ]
         exemplar_block = ""
         if exemplars:
@@ -1312,9 +1270,6 @@ Text:
         allow_code_block = bool(surface_form.get("allow_code_block", False))
         force_period = bool(surface_form.get("force_terminal_period", True))
         sf_label = surface_form.get("label", "prose")
-        target_word_count = int(context.get("target_word_count") or 90)
-        lower_words = max(24, int(target_word_count * 0.75))
-        upper_words = max(lower_words + 8, int(target_word_count * 1.25))
 
         format_hints: List[str] = []
         if allow_bullets:
@@ -1329,9 +1284,6 @@ Text:
             format_hints.append(
                 f"Write {sentence_min}-{sentence_max} sentences as prose. No bullets, no fenced code blocks."
             )
-        format_hints.append(
-            f"Aim for roughly {lower_words}-{upper_words} words. This is a style/length target, not a hard limit."
-        )
         if not force_period:
             format_hints.append("It is fine if the note does not end in a period.")
         else:
@@ -1351,7 +1303,6 @@ Text:
 {context_block}{exemplar_block}{repetition_warning}{incorporate_instruction}{code_hint}
 
 Surface form for this chunk: {sf_label} (persona: {persona_label})
-- Body archetype: {archetype_label}. {archetype_instruction}
 - """ + "\n- ".join(format_hints) + """
 
 Return only the text:"""
@@ -1447,3 +1398,4 @@ class ByteLevelStegoEncoder:
                 f,
                 indent=2,
             )
+

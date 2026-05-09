@@ -135,133 +135,6 @@ def load_pr_issue_edit_text_distribution(benign_dir: str) -> Tuple[List[str], Li
     return classes, weights
 
 
-def _percentile(values: List[int], pct: float) -> int:
-    if not values:
-        return 0
-    ordered = sorted(values)
-    idx = int(round((len(ordered) - 1) * pct))
-    idx = max(0, min(idx, len(ordered) - 1))
-    return int(ordered[idx])
-
-
-def _style_visible_text(text: str) -> str:
-    """Normalize only enough to compute aggregate benign style statistics.
-
-    The trace generator never receives benign text examples. It receives coarse
-    aggregate style measurements (word-count support, title/body prevalence)
-    so covert payloads do not expose source-format tells like being uniformly
-    short/generated. This avoids copying or overfitting to evaluation text.
-    """
-    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
-    text = re.sub(r"https?://\S+|github\.com/\S+", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", " ", text)
-
-    cleaned: List[str] = []
-    in_fence = False
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        if re.match(
-            r"^(Pull Request resolved|Approved by|Reviewed By|Reviewed-by|Differential Revision|Source-Id|ghstack-source-id|ghstack dependencies|Stack from|Co-authored-by|Signed-off-by)\s*:",
-            line,
-            flags=re.IGNORECASE,
-        ):
-            continue
-        line = re.sub(r"^\s*[-*+]\s+(?:\[[ xX]\]\s*)?", "", line)
-        line = re.sub(r"^\s*\d+[.)]\s+", "", line)
-        line = re.sub(r"^\s*#+\s*", "", line)
-        line = line.replace("`", "")
-        line = re.sub(r"\s+", " ", line).strip()
-        if line:
-            cleaned.append(line)
-    return " ".join(cleaned)
-
-
-def load_benign_semantic_style_profile(benign_dir: str) -> Dict[str, Any]:
-    """Load aggregate PR/issue edit style stats without exposing source text."""
-    word_counts: List[int] = []
-    char_counts: List[int] = []
-    line_counts: List[int] = []
-    title_body_count = 0
-    artifact_counts: Counter[str] = Counter()
-
-    for fpath in sorted(Path(benign_dir).glob("user_*.jsonl")):
-        try:
-            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except Exception:
-                        continue
-                    artifact_class = str(event.get("artifact_class") or event.get("artifactClass") or "")
-                    action = str(event.get("action") or event.get("action_type") or event.get("event_type") or "")
-                    if artifact_class not in {"PullRequest", "Issue"} or action != "edit":
-                        continue
-                    raw_text = ""
-                    for key in TEXT_KEYS:
-                        value = event.get(key)
-                        if value is not None and str(value).strip():
-                            raw_text = str(value)
-                            break
-                    if not raw_text:
-                        continue
-                    visible = _style_visible_text(raw_text)
-                    words = re.findall(r"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*", visible)
-                    if len(words) < 4:
-                        continue
-                    artifact_counts[artifact_class] += 1
-                    word_counts.append(len(words))
-                    char_counts.append(len(visible))
-                    raw_nonempty_lines = [ln for ln in raw_text.splitlines() if ln.strip()]
-                    line_counts.append(len(raw_nonempty_lines))
-                    if len(raw_nonempty_lines) >= 2 and 3 <= len(raw_nonempty_lines[0].split()) <= 18:
-                        title_body_count += 1
-        except Exception:
-            continue
-
-    if not word_counts:
-        return {
-            "source": "fallback_no_benign_style_stats",
-            "word_quantiles": {"p10": 35, "p25": 55, "p50": 90, "p75": 150, "p90": 240},
-            "title_body_rate": 0.35,
-            "count": 0,
-        }
-
-    profile = {
-        "source": "aggregate_original_benign_traces_no_text_copy",
-        "count": len(word_counts),
-        "artifact_counts": dict(artifact_counts),
-        "word_quantiles": {
-            "p10": _percentile(word_counts, 0.10),
-            "p25": _percentile(word_counts, 0.25),
-            "p50": _percentile(word_counts, 0.50),
-            "p75": _percentile(word_counts, 0.75),
-            "p90": _percentile(word_counts, 0.90),
-        },
-        "char_quantiles": {
-            "p25": _percentile(char_counts, 0.25),
-            "p50": _percentile(char_counts, 0.50),
-            "p75": _percentile(char_counts, 0.75),
-        },
-        "line_count_quantiles": {
-            "p25": _percentile(line_counts, 0.25),
-            "p50": _percentile(line_counts, 0.50),
-            "p75": _percentile(line_counts, 0.75),
-        },
-        "title_body_rate": title_body_count / len(word_counts),
-    }
-    return profile
-
-
 def load_benign_trace_length_distribution(benign_dir: str) -> List[int]:
     """Return event-count support from original benign traces.
 
@@ -1054,7 +927,6 @@ def process_one_secret(
     semantic_artifact_classes: Optional[List[str]] = None,
     semantic_artifact_weights: Optional[List[int]] = None,
     benign_trace_lengths: Optional[List[int]] = None,
-    semantic_style_profile: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[str], Optional[str], Dict[str, float], Dict[str, Any]]:
     metrics = Metrics()
     verification_stats: Dict[str, Any] = {
@@ -1127,7 +999,6 @@ def process_one_secret(
             context_extra={
                 "repo_owner": owner,
                 "repo_name": repo,
-                "semantic_style_profile": semantic_style_profile or {},
             },
         )[0]
 
@@ -1408,11 +1279,9 @@ def main():
     if args.feasibility_dir:
         semantic_artifact_classes, semantic_artifact_weights = load_pr_issue_edit_text_distribution(args.feasibility_dir)
         benign_trace_lengths = load_benign_trace_length_distribution(args.feasibility_dir)
-        semantic_style_profile = load_benign_semantic_style_profile(args.feasibility_dir)
     else:
         semantic_artifact_classes, semantic_artifact_weights = ["PullRequest", "Issue"], [1, 1]
         benign_trace_lengths = []
-        semantic_style_profile = {}
     print(
         "Semantic payload artifact support: "
         + ", ".join(f"{cls}={weight}" for cls, weight in zip(semantic_artifact_classes, semantic_artifact_weights))
@@ -1423,13 +1292,6 @@ def main():
         print(
             "Sender trace length support from benign traces: "
             f"n={len(sorted_lengths)}, min={sorted_lengths[0]}, median={p50}, max={sorted_lengths[-1]}"
-        )
-    if semantic_style_profile:
-        print(
-            "Semantic style profile from benign traces: "
-            f"source={semantic_style_profile.get('source')}, "
-            f"count={semantic_style_profile.get('count')}, "
-            f"word_quantiles={semantic_style_profile.get('word_quantiles')}"
         )
 
     secrets_dir = Path(args.secrets_dir)
@@ -1601,7 +1463,6 @@ def main():
                 semantic_artifact_classes,
                 semantic_artifact_weights,
                 benign_trace_lengths,
-                semantic_style_profile,
             )
             future_map[fut] = {
                 "secret_id": secret_id,
@@ -1730,7 +1591,6 @@ def main():
             "estimated_bytes_per_chunk": args.estimated_bytes_per_chunk,
             "stats": chunk_stats,
         },
-        "semantic_style_profile": semantic_style_profile,
         "parameters": {
             "workers": args.workers,
             "seed": args.seed,

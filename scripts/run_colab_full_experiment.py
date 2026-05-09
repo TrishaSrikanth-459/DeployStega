@@ -470,13 +470,11 @@ def main() -> None:
         smoke_summary = json.loads((smoke_dir / "generation_summary.json").read_text())
         smoke_rate = float(smoke_summary.get("verification_metrics", {}).get("verification_success_rate") or 0.0)
         smoke_sender_count = count_files(smoke_dir / "sender", "*.jsonl")
-        if smoke_rate < args.smoke_min_verification_rate or smoke_sender_count < args.smoke_min_successful_traces:
-            raise SystemExit(
-                "Smoke generation failed token-binning verification coverage; not starting full run. "
-                f"success_rate={smoke_rate:.3f}, sender_traces={smoke_sender_count}, "
-                f"required_rate={args.smoke_min_verification_rate:.3f}, "
-                f"required_traces={args.smoke_min_successful_traces}"
-            )
+
+        # Always run the semantic/source-leak smoke diagnostics on whatever
+        # smoke traces were produced. Token-binning reliability is still a
+        # validity gate before the full experiment, but it should not prevent
+        # the source-leak diagnostic from being written.
         trace_quality_report(smoke_dir / "sender", out / "smoke_quality_report.json")
         smoke_semantic_report = tfidf_source_diagnostic(
             root / "benign_traces",
@@ -492,6 +490,14 @@ def main() -> None:
                 max_auc=args.semantic_smoke_max_auc,
                 max_accuracy=args.semantic_smoke_max_accuracy,
                 label="Smoke",
+            )
+
+        if smoke_rate < args.smoke_min_verification_rate or smoke_sender_count < args.smoke_min_successful_traces:
+            raise SystemExit(
+                "Smoke generation failed token-binning verification coverage; not starting full run. "
+                f"success_rate={smoke_rate:.3f}, sender_traces={smoke_sender_count}, "
+                f"required_rate={args.smoke_min_verification_rate:.3f}, "
+                f"required_traces={args.smoke_min_successful_traces}"
             )
 
         full_dir.mkdir(parents=True, exist_ok=True)
