@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import re
+import random
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,150 @@ def assert_env() -> None:
         raise SystemExit("Missing Azure OpenAI environment variables: " + ", ".join(missing))
     if not os.environ.get("AZURE_OPENAI_DEPLOYMENT") and os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME"):
         os.environ["AZURE_OPENAI_DEPLOYMENT"] = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
+
+
+def _extract_semantic_text(event: Dict[str, Any]) -> str:
+    for key in ("semantic_text", "text", "body", "message", "content", "title"):
+        value = event.get(key) if isinstance(event, dict) else None
+        if value is not None and str(value).strip():
+            return str(value)
+    return ""
+
+
+def build_calibrated_token_bins(
+    benign_dir: Path,
+    secrets_dir: Path,
+    output_path: Path,
+    report_path: Path,
+    *,
+    seed: int = 42,
+    bin_count: int = 8,
+    bin_size: int = 256,
+) -> Dict[str, Any]:
+    """Build semantic token bins from aggregate calibration statistics.
+
+    The original static token bins are a major semantic source signature: they
+    force rare CI/release/codebook words into every covert text. This calibration
+    uses only aggregate token frequencies from original benign PR/Issue edit
+    text plus aggregate payload-byte frequencies from the secret corpus. It never
+    sends benign snippets/examples to the LLM and never copies benign text into
+    covert traces.
+    """
+    token_re = re.compile(r"[A-Za-z][A-Za-z0-9._-]{1,31}")
+    doc_freq: Counter[str] = Counter()
+    total_freq: Counter[str] = Counter()
+    casing: Dict[str, str] = {}
+    files = sorted(Path(benign_dir).glob("*.jsonl"))
+    for path in files:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("artifact_class") not in {"PullRequest", "Issue"} or event.get("action") != "edit":
+                continue
+            text = _extract_semantic_text(event)
+            if not text:
+                continue
+            toks: List[str] = []
+            for raw in token_re.findall(text):
+                tok = raw.strip("._-")
+                low = tok.lower()
+                if len(low) < 3 or len(low) > 28:
+                    continue
+                if low.startswith(("http", "www")) or "@" in low:
+                    continue
+                if sum(ch.isdigit() for ch in low) > max(2, len(low) // 2):
+                    continue
+                toks.append(low)
+                casing.setdefault(low, tok if not tok.isupper() else low)
+            if toks:
+                doc_freq.update(set(toks))
+                total_freq.update(toks)
+
+    min_df = max(2, int(0.002 * max(1, len(files))))
+    ranked = [w for w, df in doc_freq.items() if df >= min_df]
+    if len(ranked) < bin_size:
+        ranked = [w for w, _ in doc_freq.most_common(max(bin_size, len(doc_freq)))]
+    ranked.sort(key=lambda w: (doc_freq[w], total_freq[w]), reverse=True)
+    candidates = ranked[: max(bin_size * 12, bin_size)]
+    if len(candidates) < bin_size:
+        raise RuntimeError(f"Not enough calibration tokens for semantic bins: {len(candidates)}")
+
+    byte_counts = [1.0] * 256
+    for spath in sorted(Path(secrets_dir).glob("*.txt")):
+        try:
+            payload = spath.read_bytes()
+        except Exception:
+            continue
+        for bval in payload:
+            byte_counts[bval] += 1.0
+    # Generic ASCII smoothing prevents overfitting a tiny smoke subset while
+    # still aligning common payload bytes to common cover tokens.
+    ascii_prior = b" etaoinshrdlucmfwypvbgkqjxzETAOINSHRDLUCMFWYPVBGKQJXZ0123456789_-.#/:,()[]{}\n"
+    for bval in ascii_prior:
+        byte_counts[bval] += 2.0
+    byte_order = sorted(range(min(256, bin_size)), key=lambda i: (-byte_counts[i], i))
+
+    rng = random.Random(seed)
+    weights = [max(1.0, float(doc_freq[w]) ** 0.55) for w in candidates]
+    bins: List[List[str]] = []
+    for _ in range(bin_count):
+        pool = list(candidates)
+        pool_weights = list(weights)
+        chosen: List[str] = []
+        for _j in range(bin_size):
+            total = sum(pool_weights)
+            pick = rng.random() * total
+            acc = 0.0
+            idx = 0
+            for i, weight in enumerate(pool_weights):
+                acc += weight
+                if acc >= pick:
+                    idx = i
+                    break
+            chosen.append(pool.pop(idx))
+            pool_weights.pop(idx)
+        chosen.sort(key=lambda w: (doc_freq[w], total_freq[w], rng.random()), reverse=True)
+        ordered: List[Optional[str]] = [None] * bin_size
+        for token, byte_idx in zip(chosen, byte_order):
+            ordered[byte_idx] = casing.get(token, token)
+        remaining = iter(casing.get(token, token) for token in chosen[len(byte_order):])
+        for i in range(bin_size):
+            if ordered[i] is None:
+                ordered[i] = next(remaining)
+        bins.append([str(x) for x in ordered])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "calibrated_cover_token_bins_v2_byte_frequency_aligned",
+        "seed": seed,
+        "source": "aggregate benign token frequencies plus payload byte marginals; no benign examples in prompts",
+        "bin_count": bin_count,
+        "bin_size": bin_size,
+        "candidate_count": len(candidates),
+        "min_df": min_df,
+        "bins": bins,
+    }
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    report = {k: v for k, v in payload.items() if k != "bins"}
+    report["top_cover_tokens"] = ranked[:50]
+    report["top_payload_bytes"] = [
+        {"byte": i, "char": chr(i) if 32 <= i <= 126 else "", "count": byte_counts[i]}
+        for i in sorted(range(256), key=lambda b: (-byte_counts[b], b))[:32]
+    ]
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print("Calibrated semantic token bins:", json.dumps(report, indent=2)[:3000])
+    return report
 
 
 def read_jsonl_texts(trace_dir: Path, limit: int = 2500) -> List[str]:
@@ -147,6 +292,69 @@ def comparable_pr_issue_edit_texts(trace_dir: Path, limit: Optional[int] = None)
                 if limit is not None and len(texts) >= limit:
                     return texts
     return texts
+
+
+def comparable_pr_issue_edit_records(trace_dir: Path, max_per_file: Optional[int] = 3) -> List[Dict[str, str]]:
+    """File-balanced, deduped version of comparable PR/Issue edit text.
+
+    The source diagnostic should not be dominated by one large trace file or by
+    repeated PR-body duplicates. This keeps the smoke focused on semantic style
+    rather than sampling artifacts.
+    """
+    from scripts.adversarial_evaluation import normalize_semantic_text_for_detection
+
+    keys = ("semantic_text", "text", "body", "message", "content", "title")
+    records: List[Dict[str, str]] = []
+    for path in sorted(trace_dir.glob("*.jsonl")):
+        file_records: List[Dict[str, str]] = []
+        seen_in_file = set()
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                artifact_class = str(obj.get("artifact_class") or obj.get("artifactClass") or "")
+                if artifact_class not in {"PullRequest", "Issue"}:
+                    continue
+                action_raw = obj.get("action") or obj.get("action_type") or obj.get("actionType") or obj.get("event_type")
+                action = str(action_raw).strip().lower() if action_raw else "edit"
+                if action != "edit":
+                    continue
+                raw_text = ""
+                for key in keys:
+                    value = obj.get(key)
+                    if value is not None and str(value).strip():
+                        raw_text = str(value)
+                        break
+                text = normalize_semantic_text_for_detection(raw_text)
+                text = re.sub(r"<img\b[^<]*(?:>|$)", " ", text, flags=re.I)
+                text = re.sub(r'\b(?:img|src|alt|width|height)\b\s*=\s*"?', " ", text, flags=re.I)
+                text = re.sub(r"\s+", " ", text).strip()
+                if not text or len(text.split()) < 4:
+                    continue
+                dedupe_key = re.sub(r"\W+", " ", text.lower()).strip()
+                if dedupe_key in seen_in_file:
+                    continue
+                seen_in_file.add(dedupe_key)
+                file_records.append({"text": text, "source_file": str(path)})
+                if max_per_file is not None and len(file_records) >= max_per_file:
+                    break
+        records.extend(file_records)
+
+    global_seen = set()
+    deduped: List[Dict[str, str]] = []
+    for rec in records:
+        key = re.sub(r"\W+", " ", rec["text"].lower()).strip()
+        if key in global_seen:
+            continue
+        global_seen.add(key)
+        deduped.append(rec)
+    return deduped
 
 
 def _length_bin(text: str) -> str:
@@ -258,8 +466,10 @@ def tfidf_source_diagnostic(
     from sklearn.model_selection import train_test_split
     from sklearn.pipeline import make_pipeline
 
-    benign_all = comparable_pr_issue_edit_texts(benign_dir, limit=None)
-    covert_all = comparable_pr_issue_edit_texts(covert_sender_dir, limit=None)
+    benign_records = comparable_pr_issue_edit_records(benign_dir, max_per_file=3)
+    covert_records = comparable_pr_issue_edit_records(covert_sender_dir, max_per_file=3)
+    benign_all = [rec["text"] for rec in benign_records]
+    covert_all = [rec["text"] for rec in covert_records]
     benign_texts, covert_texts, length_match_report = length_matched_samples(
         benign_all,
         covert_all,
@@ -274,6 +484,10 @@ def tfidf_source_diagnostic(
         "normalization": "normalize_semantic_text_for_detection",
         "benign_count": len(benign_all),
         "covert_count": len(covert_all),
+        "source_file_counts": {
+            "benign": len({rec["source_file"] for rec in benign_records}),
+            "covert": len({rec["source_file"] for rec in covert_records}),
+        },
         "balanced_n_per_class": n,
         "length_matching": length_match_report,
         "auc_mean": None,
@@ -450,6 +664,14 @@ def main() -> None:
     print(f"output={out}")
     print(f"deployment={os.environ.get('AZURE_OPENAI_DEPLOYMENT') or os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME')}")
     print(f"api_version={os.environ.get('AZURE_OPENAI_API_VERSION')}")
+
+    build_calibrated_token_bins(
+        root / "benign_traces",
+        root / "secrets",
+        root / "token_binning_data" / "bins_k16.json",
+        out / "calibrated_token_bins_report.json",
+        seed=42,
+    )
 
     smoke_dir = out / "smoke_traces"
     full_dir = out / "covert_traces_full"

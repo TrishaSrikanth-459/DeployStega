@@ -958,10 +958,9 @@ Text:
 
         def _call_model(prompt_text: str, system_addendum: str) -> str:
             system_content = (
-                "You are editing a GitHub Pull Request or Issue body. Match real PR/issue body style: "
-                "a compact title-like clause plus practical rationale, repro, summary, or test-plan detail. "
-                "Avoid the over-polished release-note pattern where every sentence starts with 'The' "
-                "and repeats words like now/updates/handling; vary openings naturally. "
+                "You are editing a GitHub Pull Request or Issue body. Match raw GitHub PR/issue body style: "
+                "mix terse fragments, commit-message phrasing, status notes, and practical rationale without sounding like an assistant. If an existing public artifact body excerpt is provided, use its topic and register as cover context without copying exact sentences. "
+                "Avoid assistant-like polish, symmetric sentence structure, and repeated connective filler; vary openings naturally. "
                 "Do not add raw URLs, approval footers, emails, markdown tables, checklists, or code fences. "
                 "Avoid dumping identifiers as a bare checklist, code fence, or sentence-opening token run. "
                 "Some required tokens may be code identifiers such as method names, dotted "
@@ -1185,12 +1184,18 @@ Text:
         file_paths = context.get("file_paths") or []
         if isinstance(file_paths, (list, tuple)) and file_paths:
             ctx_lines.append("Relevant files: " + ", ".join(str(p) for p in list(file_paths)[:5]))
+        labels = context.get("artifact_labels") or []
+        if isinstance(labels, (list, tuple)) and labels:
+            ctx_lines.append("Labels: " + ", ".join(str(x) for x in list(labels)[:3]))
+        milestone = (context.get("milestone") or "").strip()
+        if milestone:
+            ctx_lines.append(f"Milestone: {milestone[:120]}")
         related_ids = context.get("related_identifiers") or []
         if isinstance(related_ids, (list, tuple)) and related_ids:
             ctx_lines.append("Related: " + ", ".join(str(p) for p in list(related_ids)[:5]))
         parent_text = (context.get("parent_text") or "").strip()
         if parent_text:
-            ctx_lines.append("Parent excerpt: " + parent_text[:400].replace("\n", " "))
+            ctx_lines.append("Existing public artifact body excerpt: " + parent_text[:700].replace("\n", " "))
 
         context_block = ""
         if ctx_lines:
@@ -1199,16 +1204,12 @@ Text:
             ) + "\n\n"
 
         # ---- 2. Optional style exemplars ----
-        # By default we use compact hand-written GitHub-style references rather
-        # than examples extracted from the evaluation benign traces. This avoids
-        # contaminating the comparison while still discouraging token inventories.
+        # Do not inject static example bodies by default. Even hand-written
+        # examples become a repeated generator fingerprint in lexical smoke
+        # diagnostics. The generator relies on general instructions plus public
+        # artifact context; no benign trace snippets or canned bodies are shown.
         if not exemplars:
-            exemplars = [
-                "[BE] keep parser fallback errors stable. Summary: preserve the original message when config validation retries. Test Plan: ran parser unit tests locally.",
-                "Fix stale selection after failed sync. The first render kept an old value after retry; this moves the guard earlier and adds coverage for the edge case.",
-                "Docs: clarify setup for the local cache path. The README used the old flag name, which made the example fail on a fresh checkout.",
-                "chore: make the cleanup path deterministic. This keeps deferred deletes ordered with timestamp checks and avoids a flaky teardown assertion.",
-            ]
+            exemplars = []
         exemplar_block = ""
         if exemplars:
             ex_lines = []
@@ -1257,7 +1258,7 @@ Text:
             "inventory, list, table, code block, or Markdown-formatted identifier list; weave them into one plausible PR/issue edit. "
             "Avoid starting any sentence with multiple required tokens back-to-back; "
             "put each required token inside normal grammar with verbs and connective words. "
-            "Vary sentence openings and body shape so repeated chunks do not share an obvious generated template."
+            "Vary sentence openings and body shape so repeated chunks do not share an obvious generated template. If given an existing public artifact body excerpt, preserve its topic/register but do not copy exact sentences."
         )
 
         # ---- 5. PR/issue body archetype and surface-form variation ----
@@ -1282,7 +1283,7 @@ Text:
             )
         else:
             format_hints.append(
-                f"Write {sentence_min}-{sentence_max} sentences as prose. No bullets, no fenced code blocks."
+                f"Write {sentence_min}-{sentence_max} sentences as compact PR/issue prose. Fragments and title-like clauses are fine; avoid repeating fixed labels such as Summary: or Test Plan:. No bullets, no fenced code blocks."
             )
         if not force_period:
             format_hints.append("It is fine if the note does not end in a period.")

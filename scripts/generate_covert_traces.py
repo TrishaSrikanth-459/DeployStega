@@ -38,6 +38,107 @@ from routing.semantic.stego_decoder import ByteLevelStegoDecoder
 from scripts.experiment_context import load_experiment_context
 
 
+
+PUBLIC_ARTIFACT_CONTEXT_SCHEMA_VERSION = 2
+
+
+def _artifact_identifier_number(identifier: Sequence[Any]) -> Optional[int]:
+    if not isinstance(identifier, (list, tuple)) or len(identifier) < 3:
+        return None
+    try:
+        return int(identifier[2])
+    except Exception:
+        return None
+
+
+def _github_json_public(url: str) -> Any:
+    import urllib.request
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "DeployStega-semantic-context",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _clean_public_artifact_body(body: str, limit: int = 1200) -> str:
+    body = str(body or "")
+    body = re.sub(r"<!--.*?-->", " ", body, flags=re.DOTALL)
+    body = re.sub(r"```.*?```", " ", body, flags=re.DOTALL)
+    body = re.sub(r"https?://\S+|github\.com/\S+", " ", body, flags=re.IGNORECASE)
+    body = re.sub(r"\s+", " ", body).strip()
+    return body[:limit]
+
+
+def fetch_public_artifact_context(
+    owner: str,
+    repo: str,
+    artifact_class: str,
+    identifier: Sequence[Any],
+    cache_dir: Path,
+) -> Dict[str, Any]:
+    """Fetch public PR/Issue metadata/body context for the routed artifact.
+
+    This intentionally never reads benign traces or GitHub comments. The context
+    is public artifact cover context for the same PR/Issue that receives the
+    covert body edit, so it improves topical grounding without contaminating the
+    benign-vs-covert evaluation with benign examples.
+    """
+    number = _artifact_identifier_number(identifier)
+    if artifact_class not in {"PullRequest", "Issue"} or number is None:
+        return {}
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "__", f"{owner}__{repo}__{artifact_class}__{number}")
+    cache_path = cache_dir / f"{safe}.json"
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("schema_version") == PUBLIC_ARTIFACT_CONTEXT_SCHEMA_VERSION:
+                return data
+        except Exception:
+            pass
+
+    context: Dict[str, Any] = {
+        "schema_version": PUBLIC_ARTIFACT_CONTEXT_SCHEMA_VERSION,
+        "repo": f"{owner}/{repo}",
+        "artifact_class": artifact_class,
+        "number": number,
+        "title": "",
+        "labels": [],
+        "milestone": "",
+        "file_paths": [],
+        "body_excerpt": "",
+    }
+    try:
+        issue = _github_json_public(f"https://api.github.com/repos/{owner}/{repo}/issues/{number}")
+        if isinstance(issue, dict):
+            context["title"] = str(issue.get("title") or "")[:240]
+            context["body_excerpt"] = _clean_public_artifact_body(str(issue.get("body") or ""))
+            labels = issue.get("labels") if isinstance(issue.get("labels"), list) else []
+            context["labels"] = [str(x.get("name") or "")[:80] for x in labels if isinstance(x, dict) and x.get("name")][:16]
+            milestone = issue.get("milestone") if isinstance(issue.get("milestone"), dict) else None
+            if milestone:
+                context["milestone"] = str(milestone.get("title") or "")[:140]
+    except Exception as exc:
+        context["metadata_error"] = type(exc).__name__
+
+    if artifact_class == "PullRequest":
+        try:
+            files = _github_json_public(f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files?per_page=60")
+            if isinstance(files, list):
+                context["file_paths"] = [str(x.get("filename") or "")[:160] for x in files if isinstance(x, dict) and x.get("filename")][:30]
+        except Exception:
+            pass
+
+    try:
+        cache_path.write_text(json.dumps(context, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return context
+
 def load_azure_openai_config_from_env() -> Dict[str, str]:
     return {
         "api_key": os.environ.get("AZURE_OPENAI_API_KEY", ""),
@@ -990,16 +1091,42 @@ def process_one_secret(
         semantic_artifact_class = rng.choices(semantic_classes, weights=semantic_weights, k=1)[0]
         semantic_action = "edit" if semantic_artifact_class in {"PullRequest", "Issue"} else "comment"
 
+        semantic_identifier = choose_identifier_from_snapshot(snapshot, semantic_artifact_class, rng)
+        if semantic_identifier is None:
+            semantic_identifier = [owner, repo, 1]
+        semantic_url = build_web_url(semantic_artifact_class, semantic_identifier)
+        artifact_context = fetch_public_artifact_context(
+            owner=owner,
+            repo=repo,
+            artifact_class=semantic_artifact_class,
+            identifier=semantic_identifier,
+            cache_dir=output_sender_dir.parent / "_public_artifact_context_cache",
+        )
+        context_extra = {
+            "repo_owner": owner,
+            "repo_name": repo,
+            "title": str(artifact_context.get("title") or ""),
+            "artifact_labels": [str(x) for x in (artifact_context.get("labels") or [])],
+            "milestone": str(artifact_context.get("milestone") or ""),
+            "file_paths": [str(x) for x in (artifact_context.get("file_paths") or [])],
+            "parent_text": str(artifact_context.get("body_excerpt") or ""),
+        }
+        verification_stats["semantic_artifact"] = {
+            "artifact_class": semantic_artifact_class,
+            "identifier": semantic_identifier,
+            "url": semantic_url,
+            "title_available": bool(context_extra.get("title")),
+            "file_path_count": len(context_extra.get("file_paths") or []),
+            "body_excerpt_available": bool(context_extra.get("parent_text")),
+        }
+
         chunks = encode_secret_message_in_worker(
             secret_message=secret_text,
             artifact_class=semantic_artifact_class,
             action=semantic_action,
             azure_openai_config=azure_openai_config,
             positions_filename=positions_file,
-            context_extra={
-                "repo_owner": owner,
-                "repo_name": repo,
-            },
+            context_extra=context_extra,
         )[0]
 
         num_events = len(chunks)
@@ -1062,9 +1189,9 @@ def process_one_secret(
         route_memory: Dict[str, List[Tuple[List[Any], str]]] = defaultdict(list)
         events: List[Dict[str, Any]] = []
 
-        fixed_identifier = None
-        fixed_url = None
-        fixed_artifact_class = None
+        fixed_identifier = semantic_identifier
+        fixed_url = semantic_url
+        fixed_artifact_class = semantic_artifact_class
 
         for i in range(target_events):
             payload_idx = payload_by_pos.get(i)
