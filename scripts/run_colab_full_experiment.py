@@ -641,6 +641,7 @@ def main() -> None:
     parser.add_argument("--smoke-traces", type=int, default=25)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--skip-generation", action="store_true")
+    parser.add_argument("--smoke-only", action="store_true", help="Run only smoke generation and semantic/token reliability gates, then exit before full generation.")
     parser.add_argument("--skip-ablation", action="store_true")
     parser.add_argument("--bert-epochs", type=int, default=3)
     parser.add_argument("--bert-max-samples", type=int, default=10000)
@@ -725,6 +726,10 @@ def main() -> None:
                 f"required_rate={args.smoke_min_verification_rate:.3f}, "
                 f"required_traces={args.smoke_min_successful_traces}"
             )
+
+        if args.smoke_only:
+            print("SMOKE_ONLY_DONE. Smoke passed configured gates; full generation was not started.")
+            return
 
         full_dir.mkdir(parents=True, exist_ok=True)
         run([
