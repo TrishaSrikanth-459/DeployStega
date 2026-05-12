@@ -81,15 +81,154 @@ def assert_env() -> None:
 
 
 def _extract_semantic_text(event: Dict[str, Any]) -> str:
-    for key in ("semantic_text", "text", "body", "message", "content", "title"):
+    for key in ("artifact_text", "semantic_text", "text", "body", "message", "content", "title"):
         value = event.get(key) if isinstance(event, dict) else None
         if value is not None and str(value).strip():
             return str(value)
     return ""
 
 
+def find_external_semantic_corpus(root: Path) -> Path:
+    """Find the independent GitHub semantic corpus/parser artifact for bins.
+
+    Important: token-bin vocabulary must not be learned from evaluation benign
+    or covert traces. Accepted inputs are the weekly GitHub semantic corpus or
+    corpus_parser outputs (corpus.json, valid_words.json, candidates.json, or an
+    explicitly supplied bins_k*.json).
+    """
+    candidates: List[Path] = []
+    env_path = os.environ.get("DEPLOYSTEGA_SEMANTIC_CORPUS") or os.environ.get("SEMANTIC_CORPUS_PATH")
+    if env_path:
+        candidates.append(Path(env_path))
+
+    drive_data = Path("/content/drive/MyDrive/DeployStega_data")
+    repo_bases = (root, root / "scripts", root / "data", root / "dataset")
+    data_bases = (drive_data, drive_data / "scripts", drive_data / "data", drive_data / "token_binning_data")
+    for base in repo_bases + data_bases:
+        candidates.extend([
+            base / "corpus.json",
+            base / "semantic_corpus.jsonl",
+            base / "github_semantic_corpus.jsonl",
+            base / "valid_words.json",
+            base / "candidates.json",
+        ])
+    # Only accept prebuilt bins automatically from the data mount, not the repo
+    # default, so a missing weekly corpus cannot silently fall back to stale bins.
+    candidates.extend([
+        drive_data / "token_binning_data" / "bins_k16.json",
+        drive_data / "token_binning_data" / "bins_k32.json",
+        drive_data / "token_binning_data" / "bins_k64.json",
+    ])
+
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return path
+
+    searched = "\n".join(str(p) for p in candidates)
+    raise SystemExit(
+        "Missing independent semantic corpus/parser artifact for token-bin calibration. "
+        "Do not build bins from benign_traces or covert traces. Provide the weekly "
+        "GitHub semantic corpus as corpus.json/semantic_corpus.jsonl, a corpus_parser "
+        "artifact such as valid_words.json/candidates.json, or set DEPLOYSTEGA_SEMANTIC_CORPUS.\n"
+        f"Searched:\n{searched}"
+    )
+
+
+def _word_rows(items: Iterable[Any]) -> Iterable[Dict[str, Any]]:
+    """Expose corpus_parser word lists/bins as one token row per word."""
+    for item in items:
+        if isinstance(item, str):
+            yield {"artifact_text": item}
+        elif isinstance(item, dict):
+            value = item.get("word") or item.get("token") or item.get("text") or item.get("artifact_text")
+            if value:
+                yield {"artifact_text": str(value)}
+        elif isinstance(item, list):
+            yield from _word_rows(item)
+
+
+def _corpus_rows(corpus_path: Path) -> Iterable[Dict[str, Any]]:
+    """Yield rows from weekly corpus JSONL/JSON or corpus_parser artifacts."""
+    with corpus_path.open("r", encoding="utf-8", errors="ignore") as f:
+        first = f.read(1)
+        f.seek(0)
+        if first == "[":
+            data = json.load(f)
+            if isinstance(data, list):
+                # A JSON array can be rows or a corpus_parser word list. Dicts
+                # with semantic text stay rows; bare strings become word rows.
+                for item in data:
+                    if isinstance(item, dict) and _extract_semantic_text(item):
+                        yield item
+                    else:
+                        yield from _word_rows([item])
+            return
+        if first == "{":
+            try:
+                data = json.load(f)
+            except Exception:
+                data = None
+            if isinstance(data, dict):
+                # corpus_parser / extraction artifacts can be nested in common keys.
+                for key in ("rows", "records", "items", "data", "corpus"):
+                    if isinstance(data.get(key), list):
+                        for item in data[key]:
+                            if isinstance(item, dict) and _extract_semantic_text(item):
+                                yield item
+                            else:
+                                yield from _word_rows([item])
+                        return
+                for key in ("valid_words", "candidates", "words", "vocab", "tokens", "bins"):
+                    if isinstance(data.get(key), list):
+                        yield from _word_rows(data[key])
+                        return
+                if _extract_semantic_text(data):
+                    yield data
+            return
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                yield obj
+            elif isinstance(obj, str):
+                yield {"artifact_text": obj}
+
+
+def _shape_ok_for_bin_token(token: str) -> bool:
+    """Shape filter for corpus-derived bin tokens, not a semantic whitelist.
+
+    The corpus parser provides candidate GitHub text; this filter removes only
+    obvious non-word/source artifacts (URLs, hashes, version strings, emails,
+    long path fragments) that would create visible source leakage in covert text.
+    """
+    if not token:
+        return False
+    if len(token) < 3 or len(token) > 28:
+        return False
+    low = token.lower().strip("._-")
+    if not low:
+        return False
+    if low.startswith(("http", "www", "github.com", "git@")) or "@" in low:
+        return False
+    if "/" in low or "\\" in low:
+        return False
+    if re.fullmatch(r"v?\d+(?:[._-]\d+){1,}.*", low):
+        return False
+    if re.fullmatch(r"[a-f0-9]{8,}", low):
+        return False
+    if sum(ch.isdigit() for ch in low) > max(2, len(low) // 3):
+        return False
+    if not re.search(r"[aeiouy]", low) and len(low) > 5:
+        return False
+    return True
+
+
 def build_calibrated_token_bins(
-    benign_dir: Path,
+    corpus_path: Path,
     secrets_dir: Path,
     output_path: Path,
     report_path: Path,
@@ -98,63 +237,52 @@ def build_calibrated_token_bins(
     bin_count: int = 8,
     bin_size: int = 256,
 ) -> Dict[str, Any]:
-    """Build semantic token bins from aggregate calibration statistics.
+    """Build semantic token bins from the independent weekly GitHub corpus.
 
-    The original static token bins are a major semantic source signature: they
-    force rare CI/release/codebook words into every covert text. This calibration
-    uses only aggregate token frequencies from original benign PR/Issue edit
-    text plus aggregate payload-byte frequencies from the secret corpus. It never
-    sends benign snippets/examples to the LLM and never copies benign text into
-    covert traces.
+    The bin vocabulary must not come from evaluation benign traces. We use the
+    corpus/parser output that was built from GitHub semantic text for the chosen
+    week, then align token-bin byte indexes to aggregate payload-byte frequency.
+    No corpus snippets, benign snippets, or generated examples are sent to the
+    LLM prompt; only the local codebook is changed.
     """
     token_re = re.compile(r"[A-Za-z][A-Za-z0-9._-]{1,31}")
     doc_freq: Counter[str] = Counter()
     total_freq: Counter[str] = Counter()
     casing: Dict[str, str] = {}
-    files = sorted(Path(benign_dir).glob("*.jsonl"))
-    for path in files:
-        try:
-            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except Exception:
-            continue
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-            except Exception:
-                continue
-            if not isinstance(event, dict):
-                continue
-            if event.get("artifact_class") not in {"PullRequest", "Issue"} or event.get("action") != "edit":
-                continue
-            text = _extract_semantic_text(event)
-            if not text:
-                continue
-            toks: List[str] = []
-            for raw in token_re.findall(text):
-                tok = raw.strip("._-")
-                low = tok.lower()
-                if len(low) < 3 or len(low) > 28:
-                    continue
-                if low.startswith(("http", "www")) or "@" in low:
-                    continue
-                if sum(ch.isdigit() for ch in low) > max(2, len(low) // 2):
-                    continue
-                toks.append(low)
-                casing.setdefault(low, tok if not tok.isupper() else low)
-            if toks:
-                doc_freq.update(set(toks))
-                total_freq.update(toks)
+    doc_count = 0
 
-    min_df = max(2, int(0.002 * max(1, len(files))))
+    # valid_words.json/candidates.json from corpus_parser can be a JSON array of strings.
+    array_words_mode = corpus_path.name in {"valid_words.json", "candidates.json"}
+    for row in _corpus_rows(corpus_path):
+        text = _extract_semantic_text(row)
+        if not text:
+            continue
+        toks: List[str] = []
+        for raw in token_re.findall(text):
+            tok = raw.strip("._-")
+            low = tok.lower()
+            if not _shape_ok_for_bin_token(low):
+                continue
+            toks.append(low)
+            casing.setdefault(low, tok if not tok.isupper() else low)
+        if toks:
+            doc_count += 1
+            doc_freq.update(set(toks))
+            total_freq.update(toks)
+
+    if not total_freq:
+        raise RuntimeError(f"No usable semantic corpus tokens found in {corpus_path}")
+
+    min_df = 1 if array_words_mode else max(3, int(0.0005 * max(1, doc_count)))
     ranked = [w for w, df in doc_freq.items() if df >= min_df]
     if len(ranked) < bin_size:
-        ranked = [w for w, _ in doc_freq.most_common(max(bin_size, len(doc_freq)))]
+        ranked = [w for w, _ in total_freq.most_common(max(bin_size, len(total_freq)))]
     ranked.sort(key=lambda w: (doc_freq[w], total_freq[w]), reverse=True)
-    candidates = ranked[: max(bin_size * 12, bin_size)]
+    candidates = ranked[: max(bin_size * 16, bin_size)]
     if len(candidates) < bin_size:
-        raise RuntimeError(f"Not enough calibration tokens for semantic bins: {len(candidates)}")
+        raise RuntimeError(
+            f"Not enough independent corpus tokens for semantic bins: {len(candidates)} from {corpus_path}"
+        )
 
     byte_counts = [1.0] * 256
     for spath in sorted(Path(secrets_dir).glob("*.txt")):
@@ -164,8 +292,6 @@ def build_calibrated_token_bins(
             continue
         for bval in payload:
             byte_counts[bval] += 1.0
-    # Generic ASCII smoothing prevents overfitting a tiny smoke subset while
-    # still aligning common payload bytes to common cover tokens.
     ascii_prior = b" etaoinshrdlucmfwypvbgkqjxzETAOINSHRDLUCMFWYPVBGKQJXZ0123456789_-.#/:,()[]{}\n"
     for bval in ascii_prior:
         byte_counts[bval] += 2.0
@@ -202,9 +328,11 @@ def build_calibrated_token_bins(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema": "calibrated_cover_token_bins_v2_byte_frequency_aligned",
+        "schema": "external_github_corpus_token_bins_v1_byte_frequency_aligned",
         "seed": seed,
-        "source": "aggregate benign token frequencies plus payload byte marginals; no benign examples in prompts",
+        "source": "independent weekly GitHub semantic corpus plus payload byte marginals; no evaluation trace vocabulary",
+        "corpus_path": str(corpus_path),
+        "doc_count": doc_count,
         "bin_count": bin_count,
         "bin_size": bin_size,
         "candidate_count": len(candidates),
@@ -213,14 +341,14 @@ def build_calibrated_token_bins(
     }
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     report = {k: v for k, v in payload.items() if k != "bins"}
-    report["top_cover_tokens"] = ranked[:50]
+    report["top_corpus_tokens"] = ranked[:50]
     report["top_payload_bytes"] = [
         {"byte": i, "char": chr(i) if 32 <= i <= 126 else "", "count": byte_counts[i]}
         for i in sorted(range(256), key=lambda b: (-byte_counts[b], b))[:32]
     ]
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print("Calibrated semantic token bins:", json.dumps(report, indent=2)[:3000])
+    print("Calibrated semantic token bins from independent corpus:", json.dumps(report, indent=2)[:3000])
     return report
 
 
@@ -666,8 +794,9 @@ def main() -> None:
     print(f"deployment={os.environ.get('AZURE_OPENAI_DEPLOYMENT') or os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME')}")
     print(f"api_version={os.environ.get('AZURE_OPENAI_API_VERSION')}")
 
+    corpus_path = find_external_semantic_corpus(root)
     build_calibrated_token_bins(
-        root / "benign_traces",
+        corpus_path,
         root / "secrets",
         root / "token_binning_data" / "bins_k16.json",
         out / "calibrated_token_bins_report.json",
