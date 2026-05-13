@@ -1025,6 +1025,7 @@ def main() -> None:
             "--seed", "123",
             "--max-secret-chunks", "20",
             "--estimated-bytes-per-chunk", "12",
+            "--diverse-repo-sampling",
         ], cwd=root, log_path=log_dir / "01_smoke_generation.log")
 
         smoke_summary = json.loads((smoke_dir / "generation_summary.json").read_text())

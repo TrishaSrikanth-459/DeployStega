@@ -190,6 +190,39 @@ def load_repo_distribution(benign_dir: str) -> Tuple[List[Tuple[str, str]], List
     return repos, weights
 
 
+def weighted_repo_sequence_without_replacement(
+    repos: Sequence[Tuple[str, str]],
+    weights: Sequence[int],
+    n: int,
+    seed: int,
+) -> List[Tuple[str, str]]:
+    """Draw a weighted repo sequence while avoiding tiny-smoke topic collapse.
+
+    This is used for source-leak smoke generation only. It does not touch the
+    full evaluation default. The goal is to test semantic generator style rather
+    than accidentally making every smoke trace about the same package/repo.
+    """
+    if not repos or n <= 0:
+        return []
+    rng = random.Random(seed)
+    out: List[Tuple[str, str]] = []
+    pairs = [(repo, max(1.0, float(weight))) for repo, weight in zip(repos, weights)]
+    while len(out) < n:
+        # Efraimidis-Spirakis weighted permutation: higher weight means earlier
+        # in the without-replacement pass, but every repo appears at most once
+        # before the pool refills.
+        keyed = []
+        for repo, weight in pairs:
+            key = rng.random() ** (1.0 / weight)
+            keyed.append((key, repo))
+        keyed.sort(reverse=True)
+        for _key, repo in keyed:
+            out.append(repo)
+            if len(out) >= n:
+                break
+    return out
+
+
 TEXT_KEYS = ("semantic_text", "text", "body", "message", "content", "title")
 
 
@@ -1330,6 +1363,8 @@ def main():
                         help="Estimated payload bytes carried per chunk for pre-filtering secrets")
     parser.add_argument("--min-secret-keep-rate", type=float, default=0.95,
                         help="Minimum fraction of non-empty secrets the auto-selected max-secret-chunks must retain")
+    parser.add_argument("--diverse-repo-sampling", action="store_true",
+                        help="Use weighted without-replacement repo sampling for small smoke tests to avoid topic collapse")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1511,6 +1546,16 @@ def main():
     skipped_empty_records: List[Dict[str, Any]] = list(empty_records)
 
     snapshot_path_cache: Dict[Tuple[str, str], str] = {}
+    repo_draws: List[Tuple[str, str]] = []
+    repo_draw_index = 0
+    if args.diverse_repo_sampling:
+        repo_draws = weighted_repo_sequence_without_replacement(
+            repos=repos,
+            weights=repo_weights,
+            n=len(analyzable_records),
+            seed=args.seed,
+        )
+        print("Using weighted without-replacement repo sampling for this run")
 
     for record in empty_records:
         skipped += 1
@@ -1556,7 +1601,11 @@ def main():
                 )
                 continue
 
-            sampled_owner, sampled_repo = random.choices(repos, weights=repo_weights, k=1)[0]
+            if repo_draws:
+                sampled_owner, sampled_repo = repo_draws[repo_draw_index % len(repo_draws)]
+                repo_draw_index += 1
+            else:
+                sampled_owner, sampled_repo = random.choices(repos, weights=repo_weights, k=1)[0]
 
             repo_key = (sampled_owner, sampled_repo)
             if repo_key not in snapshot_path_cache:
