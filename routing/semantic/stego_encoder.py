@@ -244,10 +244,11 @@ SAMPLING_BAND: Dict[str, Tuple[float, float]] = {
     "top_p": (0.85, 0.97),
 }
 
-# Default per-chunk capacity. Lower than the legacy 96/128 so each chunk
-# carries ~8 forced tokens spread across several sentences instead of ~24
-# stacked into 3-6.
-DEFAULT_TARGET_BITS_PER_CHUNK = 16
+# Default per-chunk capacity. Lower than the legacy 96/128 but high enough to
+# avoid exploding each secret into dozens of tiny LLM calls. With the current
+# independent-corpus byte bins this is usually four required words per chunk:
+# enough to preserve token-binning reliability without forcing token lists.
+DEFAULT_TARGET_BITS_PER_CHUNK = 32
 DEFAULT_MAX_CHOICES_PER_CHUNK = 4
 
 # Search paths for the optional benign exemplar corpus. The encoder degrades
