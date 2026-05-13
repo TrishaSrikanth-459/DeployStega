@@ -255,6 +255,68 @@ DEFAULT_MAX_CHOICES_PER_CHUNK = 4
 DEFAULT_BENIGN_EXEMPLARS_FILENAME = "semantic_style_exemplars.jsonl"
 BENIGN_EXEMPLARS_ENV_VAR = "STEGO_BENIGN_EXEMPLARS_PATH"
 
+# Aggregate style profile built from the independent weekly GitHub semantic
+# corpus. This deliberately contains counts/buckets only, never evaluation
+# benign snippets. It corrects the model prior away from generic assistant prose
+# while preserving research separation between benign controls and covert text.
+DEFAULT_STYLE_PROFILE_FILENAME = "semantic_style_profile.json"
+STYLE_PROFILE_ENV_VAR = "STEGO_SEMANTIC_STYLE_PROFILE"
+
+
+STYLE_CATEGORY_GUIDANCE: Dict[str, str] = {
+    "dependency_update": (
+        "Use a dependency/update PR-body shape after source normalization: mention a package, bump/update, "
+        "compatibility/conflict status, or a short validation note. Do not include badges or raw links."
+    ),
+    "backport_or_cherry_pick": (
+        "Use a backport/cherry-pick PR-body shape: mention the target branch or release, picked commits, "
+        "conflict status, and why the change is being carried over."
+    ),
+    "ci_or_coverage_report": (
+        "Use a CI/coverage/status body shape: mention the failing or checked path, coverage/build/test status, "
+        "and the practical follow-up. Keep it textual, not a table."
+    ),
+    "bug_repro_or_issue": (
+        "Use an issue/repro body shape: observed behavior, expected behavior, an error/failure clue, "
+        "or a compact reproduction detail."
+    ),
+    "docs_or_example_update": (
+        "Use a docs/example PR-body shape: explain a confusing section, README/example wording, "
+        "or setup instruction and the expected reader impact."
+    ),
+    "maintenance_or_refactor": (
+        "Use a maintenance/refactor PR-body shape: concise rationale, moved/renamed/cleaned path, "
+        "and a compatibility or test note."
+    ),
+    "issue_discussion": (
+        "Use an issue-body edit shape: practical problem statement with current behavior, expected behavior, "
+        "and enough context for maintainers."
+    ),
+    "feature_or_fix_pr": (
+        "Use a feature/fix PR-body shape: subject-like first clause, implementation detail, and a compact "
+        "test or rollout note."
+    ),
+}
+
+
+STYLE_SURFACE_GUIDANCE: Dict[str, str] = {
+    "terse_subject": "Keep it terse, almost commit-message-like, with one short explanatory sentence if needed.",
+    "short_subject_plus_body": "Start with a short subject-like clause, then one compact body paragraph.",
+    "compact_paragraph": "Use one compact paragraph with ordinary GitHub PR/issue prose.",
+    "multi_paragraph_body": "Use two short paragraphs; no headings, no lists.",
+    "sectioned_body": "Use light section wording in prose, but avoid Markdown headings and templates.",
+    "bullet_body": "Use prose that reads like bullets were collapsed into sentences; do not emit actual bullets.",
+}
+
+
+STYLE_LENGTH_GUIDANCE: Dict[str, str] = {
+    "000-011": "Aim for 8-14 words.",
+    "012-031": "Aim for 18-34 words.",
+    "032-079": "Aim for 40-75 words.",
+    "080-159": "Aim for 75-130 words.",
+    "160+": "Aim for 90-150 words; do not be verbose.",
+}
+
 
 # ============================================================
 # BYTE-LEVEL Semantic Encoder
@@ -327,6 +389,7 @@ class ByteLevelSemanticEncoder:
         self._exemplars_by_class: Dict[str, List[str]] = self._load_benign_exemplars(
             benign_exemplars_path
         )
+        self._style_profile: Dict[str, Any] = self._load_style_profile()
 
         if not self.quiet:
             print("\nBYTE-LEVEL ENCODING CAPACITY")
@@ -338,6 +401,8 @@ class ByteLevelSemanticEncoder:
             print(f"  max_choices_per_chunk={self.max_choices_per_chunk}")
             exemplar_classes = sorted(self._exemplars_by_class)
             print(f"  benign exemplars loaded for: {exemplar_classes or '(none)'}")
+            style_classes = sorted((self._style_profile.get("artifact_profiles") or {}).keys())
+            print(f"  independent corpus style profile: {style_classes or '(none)'}")
 
         if len(self.large_bins) == 0 and len(self.medium_bins) == 0 and len(self.small_bins) < 2:
             raise RuntimeError(
@@ -448,6 +513,113 @@ class ByteLevelSemanticEncoder:
             except (OSError, UnicodeDecodeError):
                 continue
         return {}
+
+    def _candidate_style_profile_paths(self) -> List[str]:
+        candidates: List[str] = []
+        env_path = os.environ.get(STYLE_PROFILE_ENV_VAR)
+        if env_path:
+            candidates.append(env_path)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        for rel in (
+            f"../../token_binning_data/{DEFAULT_STYLE_PROFILE_FILENAME}",
+            f"../../../token_binning_data/{DEFAULT_STYLE_PROFILE_FILENAME}",
+            f"../../data/{DEFAULT_STYLE_PROFILE_FILENAME}",
+            f"../../experiments/{DEFAULT_STYLE_PROFILE_FILENAME}",
+        ):
+            candidates.append(os.path.normpath(os.path.join(base_dir, rel)))
+        seen: Set[str] = set()
+        ordered: List[str] = []
+        for p in candidates:
+            if p and p not in seen:
+                seen.add(p)
+                ordered.append(p)
+        return ordered
+
+    def _load_style_profile(self) -> Dict[str, Any]:
+        for path in self._candidate_style_profile_paths():
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("artifact_profiles"), dict):
+                    if not self.quiet:
+                        print(f"Loaded independent semantic style profile from {path}")
+                    return data
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+        return {}
+
+    @staticmethod
+    def _weighted_label(rng: random.Random, items: Any, fallback: str) -> str:
+        if not isinstance(items, list) or not items:
+            return fallback
+        labels: List[str] = []
+        weights: List[float] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip()
+            if not label:
+                continue
+            try:
+                weight = float(item.get("weight") or 0)
+            except Exception:
+                weight = 0.0
+            if weight <= 0:
+                continue
+            labels.append(label)
+            weights.append(weight)
+        if not labels:
+            return fallback
+        return rng.choices(labels, weights=weights, k=1)[0]
+
+    def _pick_corpus_style_profile(
+        self,
+        rng: random.Random,
+        artifact_class: str,
+    ) -> Dict[str, Any]:
+        artifact_profiles = self._style_profile.get("artifact_profiles") or {}
+        if not isinstance(artifact_profiles, dict) or not artifact_profiles:
+            return {}
+
+        profile = artifact_profiles.get(artifact_class)
+        if not isinstance(profile, dict):
+            # Payload events are restricted to PR/Issue edit support, but keep a
+            # stable fallback for older traces or unusual snapshots.
+            profile = artifact_profiles.get("PullRequest") or artifact_profiles.get("Issue")
+        if not isinstance(profile, dict):
+            return {}
+
+        category = self._weighted_label(
+            rng,
+            profile.get("categories"),
+            "feature_or_fix_pr" if artifact_class != "Issue" else "issue_discussion",
+        )
+        cat_profiles = profile.get("category_profiles") or {}
+        cat_profile = cat_profiles.get(category) if isinstance(cat_profiles, dict) else {}
+        if not isinstance(cat_profile, dict):
+            cat_profile = {}
+
+        surface = self._weighted_label(
+            rng,
+            cat_profile.get("surfaces") or profile.get("surfaces"),
+            "compact_paragraph",
+        )
+        length_bucket = self._weighted_label(
+            rng,
+            cat_profile.get("length_buckets") or profile.get("length_buckets"),
+            "032-079",
+        )
+        anchors = cat_profile.get("anchors") if isinstance(cat_profile.get("anchors"), list) else []
+        anchors = [str(x) for x in anchors if isinstance(x, str) and x.strip()]
+        rng.shuffle(anchors)
+        return {
+            "category": category,
+            "surface": surface,
+            "length_bucket": length_bucket,
+            "anchors": anchors[:12],
+        }
 
     @staticmethod
     def _chunk_seed(message_seed: int, chunk_idx: int) -> int:
@@ -940,6 +1112,7 @@ Text:
         surface_form = self._pick_surface_form(chunk_rng, force_code_block=force_code_block)
         body_archetype = self._pick_body_archetype(chunk_rng)
         exemplars = self._pick_exemplars(chunk_rng, artifact_class, k=2)
+        corpus_style_profile = self._pick_corpus_style_profile(chunk_rng, artifact_class)
         temperature, top_p = self._sample_temperature(chunk_rng)
 
         prompt = self._build_byte_prompt(
@@ -954,13 +1127,15 @@ Text:
             persona_label=persona_label,
             surface_form=surface_form,
             body_archetype=body_archetype,
+            corpus_style_profile=corpus_style_profile,
         )
 
         def _call_model(prompt_text: str, system_addendum: str) -> str:
             system_content = (
                 "You are editing a GitHub Pull Request or Issue body. Match raw GitHub PR/issue body style: "
-                "mix terse fragments, commit-message phrasing, status notes, and practical rationale without sounding like an assistant. If an existing public artifact body excerpt is provided, use its topic and register as cover context without copying exact sentences. "
-                "Avoid assistant-like polish, symmetric sentence structure, and repeated connective filler; vary openings naturally. "
+                "mix terse fragments, commit-message phrasing, dependency/backport/status bodies, bug reports, and practical rationale without sounding like an assistant. "
+                "Follow the independent-corpus style target when provided. If an existing public artifact body excerpt is provided, use its topic and register as cover context without copying exact sentences. "
+                "Avoid assistant-like polish, symmetric sentence structure, repeated connective filler, and generic review-note wording; vary openings naturally. "
                 "Do not add raw URLs, approval footers, emails, markdown tables, checklists, or code fences. "
                 "Avoid dumping identifiers as a bare checklist, code fence, or sentence-opening token run. "
                 "Some required tokens may be code identifiers such as method names, dotted "
@@ -1165,6 +1340,7 @@ Text:
         persona_label: str,
         surface_form: Dict[str, Any],
         body_archetype: Dict[str, str],
+        corpus_style_profile: Dict[str, Any],
     ) -> str:
         # ---- 1. Optional artifact-context conditioning ----
         # Any of these keys, if present in the caller context, are surfaced to
@@ -1261,7 +1437,34 @@ Text:
             "Vary sentence openings and body shape so repeated chunks do not share an obvious generated template. If given an existing public artifact body excerpt, preserve its topic/register but do not copy exact sentences."
         )
 
-        # ---- 5. PR/issue body archetype and surface-form variation ----
+        # ---- 5. Independent-corpus style profile and surface variation ----
+        # This is the key source-leak fix: when available, generation is guided
+        # by aggregate style buckets from a separate weekly GitHub corpus, not
+        # by benign evaluation traces and not by static generic examples.
+        style_profile_block = ""
+        if corpus_style_profile:
+            category = str(corpus_style_profile.get("category") or "feature_or_fix_pr")
+            surface = str(corpus_style_profile.get("surface") or "compact_paragraph")
+            length_bucket = str(corpus_style_profile.get("length_bucket") or "032-079")
+            anchors = [str(x) for x in corpus_style_profile.get("anchors") or [] if str(x).strip()]
+            anchor_hint = ""
+            if anchors:
+                anchor_hint = (
+                    "\nOptional independent-corpus lexical anchors for this style bucket "
+                    "(use only if natural, and do not force all of them): "
+                    + ", ".join(anchors[:10])
+                )
+            style_profile_block = (
+                "Independent GitHub corpus style target (aggregate buckets only; no example text):\n"
+                f"- corpus category: {category}\n"
+                f"- corpus surface shape: {surface}\n"
+                f"- corpus length bucket: {length_bucket} ({STYLE_LENGTH_GUIDANCE.get(length_bucket, 'Aim for a natural GitHub PR/issue body length.')})\n"
+                f"- category guidance: {STYLE_CATEGORY_GUIDANCE.get(category, STYLE_CATEGORY_GUIDANCE['feature_or_fix_pr'])}\n"
+                f"- surface guidance: {STYLE_SURFACE_GUIDANCE.get(surface, STYLE_SURFACE_GUIDANCE['compact_paragraph'])}"
+                f"{anchor_hint}\n\n"
+            )
+
+        # ---- 6. PR/issue body archetype and surface-form variation ----
         archetype_label = str(body_archetype.get("label", "pr_issue_body"))
         archetype_instruction = str(body_archetype.get("instruction", "Write as a compact PR/issue body edit."))
 
@@ -1290,7 +1493,7 @@ Text:
         else:
             format_hints.append("End with a sentence-final period.")
 
-        # ---- 6. Opening framed by action / persona ----
+        # ---- 7. Opening framed by action / persona ----
         if artifact_class in {"PullRequest", "Issue"} or action == "edit":
             opening = f"Write an updated {artifact_type} body text."
         elif action == "comment" or is_comment:
@@ -1298,10 +1501,10 @@ Text:
         else:
             opening = f"Write a short PR/issue-style body note that fits a {artifact_type}."
 
-        # ---- 7. Assemble ----
+        # ---- 8. Assemble ----
         return f"""{opening}
 
-{context_block}{exemplar_block}{repetition_warning}{incorporate_instruction}{code_hint}
+{context_block}{style_profile_block}{exemplar_block}{repetition_warning}{incorporate_instruction}{code_hint}
 
 Surface form for this chunk: {sf_label} (persona: {persona_label})
 - """ + "\n- ".join(format_hints) + """
@@ -1399,4 +1602,3 @@ class ByteLevelStegoEncoder:
                 f,
                 indent=2,
             )
-

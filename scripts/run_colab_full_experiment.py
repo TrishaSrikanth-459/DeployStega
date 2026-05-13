@@ -167,7 +167,22 @@ def _corpus_rows(corpus_path: Path) -> Iterable[Dict[str, Any]]:
             try:
                 data = json.load(f)
             except Exception:
-                data = None
+                # Most weekly corpus exports are JSONL: one JSON object per
+                # line. The first byte is still "{", so we must fall back to
+                # streaming line-by-line instead of silently returning no rows.
+                f.seek(0)
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(obj, dict):
+                        yield obj
+                    elif isinstance(obj, str):
+                        yield {"artifact_text": obj}
+                return
             if isinstance(data, dict):
                 # corpus_parser / extraction artifacts can be nested in common keys.
                 for key in ("rows", "records", "items", "data", "corpus"):
@@ -196,6 +211,183 @@ def _corpus_rows(corpus_path: Path) -> Iterable[Dict[str, Any]]:
                 yield obj
             elif isinstance(obj, str):
                 yield {"artifact_text": obj}
+
+
+def _artifact_type_from_corpus_row(row: Dict[str, Any]) -> str:
+    return str(
+        row.get("artifact_type")
+        or row.get("artifact_class")
+        or row.get("artifactClass")
+        or ""
+    ).strip()
+
+
+def _classify_corpus_text_style(text: str, artifact_type: str) -> str:
+    """Classify independent corpus text into coarse aggregate style buckets.
+
+    These are not label filters or benign-trace examples. They are aggregate
+    buckets from the external GitHub corpus so the generator can match the
+    *mixture* of real PR/issue body styles instead of collapsing into generic
+    assistant-written review notes.
+    """
+    low = text.lower()
+    if re.search(r"\bdependabot\b|\bbump(?:s|ed)?\b|\bdependency\b|\bdependencies\b|\bpackage\b|\brelease notes\b|\bchangelog\b", low):
+        return "dependency_update"
+    if re.search(r"\bbackport\b|\bcherry[- ]pick\b|\bcherry picked\b|\bfollowing commits\b|\bconflict(?:s|ing)?\b", low):
+        return "backport_or_cherry_pick"
+    if re.search(r"\bcodecov\b|\bcoverage\b|\bworkflow\b|\bci\b|\bgithub actions\b|\bbuild failed\b|\bstatus check\b", low):
+        return "ci_or_coverage_report"
+    if re.search(r"\brepro(?:duce|duction)?\b|\bexpected\b|\bactual\b|\bobserved\b|\bsteps to\b|\bstack trace\b|\berror\b|\bcrash\b|\bfailing\b", low):
+        return "bug_repro_or_issue"
+    if re.search(r"\breadme\b|\bdocs?\b|\bdocumentation\b|\bguide\b|\bexample\b|\btutorial\b", low):
+        return "docs_or_example_update"
+    if re.search(r"\brefactor\b|\bcleanup\b|\bchore\b|\brename\b|\bmove\b|\bremove\b|\bdeprecate\b", low):
+        return "maintenance_or_refactor"
+    if artifact_type == "Issue":
+        return "issue_discussion"
+    return "feature_or_fix_pr"
+
+
+def _surface_shape_for_corpus_text(text: str) -> str:
+    raw_lines = [ln.rstrip() for ln in str(text).splitlines()]
+    lines = [ln.strip() for ln in raw_lines if ln.strip()]
+    first = lines[0] if lines else ""
+    if re.search(r"(?m)^\s*[-*]\s+", text):
+        return "bullet_body"
+    if re.search(r"(?m)^\s*#{1,4}\s+", text) or re.search(r"(?i)\b(summary|description|test plan|steps to reproduce|expected behavior|actual behavior)\s*:", text):
+        return "sectioned_body"
+    if len(lines) >= 3:
+        return "multi_paragraph_body"
+    if first and len(first.split()) <= 10 and len(lines) >= 2:
+        return "short_subject_plus_body"
+    if len(text.split()) <= 16:
+        return "terse_subject"
+    return "compact_paragraph"
+
+
+def _length_bucket_for_word_count(word_count: int) -> str:
+    if word_count < 12:
+        return "000-011"
+    if word_count < 32:
+        return "012-031"
+    if word_count < 80:
+        return "032-079"
+    if word_count < 160:
+        return "080-159"
+    return "160+"
+
+
+def build_independent_semantic_style_profile(
+    corpus_path: Path,
+    output_path: Path,
+    report_path: Path,
+    *,
+    max_rows: int = 250000,
+) -> Dict[str, Any]:
+    """Build aggregate PR/Issue style profile from the independent corpus.
+
+    The resulting file contains only counts and coarse buckets, never corpus
+    snippets. It is safe to pass to the generator because it cannot memorize or
+    reproduce evaluation benign traces; it just corrects the generator's prior
+    from "generic LLM prose" toward the independent GitHub corpus mixture.
+    """
+    artifact_counts: Counter[str] = Counter()
+    category_counts: Dict[str, Counter[str]] = defaultdict(Counter)
+    surface_counts: Dict[str, Counter[str]] = defaultdict(Counter)
+    length_counts: Dict[str, Counter[str]] = defaultdict(Counter)
+    category_surface_counts: Dict[str, Dict[str, Counter[str]]] = defaultdict(lambda: defaultdict(Counter))
+    category_length_counts: Dict[str, Dict[str, Counter[str]]] = defaultdict(lambda: defaultdict(Counter))
+
+    rows_seen = 0
+    token_re = re.compile(r"[A-Za-z][A-Za-z0-9._-]{1,31}")
+    token_counts_by_category: Dict[str, Counter[str]] = defaultdict(Counter)
+    global_token_counts: Counter[str] = Counter()
+
+    for row in _corpus_rows(corpus_path):
+        rows_seen += 1
+        if rows_seen > max_rows:
+            break
+        artifact_type = _artifact_type_from_corpus_row(row)
+        if artifact_type not in {"PullRequest", "Issue"}:
+            continue
+        text = _extract_semantic_text(row)
+        if not text or len(text.split()) < 4:
+            continue
+
+        category = _classify_corpus_text_style(text, artifact_type)
+        surface = _surface_shape_for_corpus_text(text)
+        length_bucket = _length_bucket_for_word_count(len(text.split()))
+        artifact_counts[artifact_type] += 1
+        category_counts[artifact_type][category] += 1
+        surface_counts[artifact_type][surface] += 1
+        length_counts[artifact_type][length_bucket] += 1
+        category_surface_counts[artifact_type][category][surface] += 1
+        category_length_counts[artifact_type][category][length_bucket] += 1
+
+        # Aggregate token anchors are single tokens from the independent corpus,
+        # not examples. Shape-only filtering prevents raw source artifacts.
+        for raw in token_re.findall(text):
+            low = raw.strip("._-").lower()
+            if _shape_ok_for_bin_token(low):
+                token_counts_by_category[f"{artifact_type}:{category}"][low] += 1
+                global_token_counts[low] += 1
+
+    if not artifact_counts:
+        raise RuntimeError(f"No PullRequest/Issue style rows found in independent corpus: {corpus_path}")
+
+    def weighted_list(counter: Counter[str], *, top: Optional[int] = None) -> List[Dict[str, Any]]:
+        items = counter.most_common(top)
+        return [{"label": str(label), "weight": int(weight)} for label, weight in items if weight > 0]
+
+    artifact_profiles: Dict[str, Any] = {}
+    for artifact_type in sorted(artifact_counts):
+        categories = weighted_list(category_counts[artifact_type])
+        cat_profiles: Dict[str, Any] = {}
+        for item in categories:
+            category = item["label"]
+            token_key = f"{artifact_type}:{category}"
+            # Choose anchors by category distinctiveness, not raw frequency,
+            # so generic function words do not become another generator
+            # fingerprint. This is a statistical ranking over the independent
+            # corpus; it is not a whitelist or trace-derived vocabulary.
+            cat_counter = token_counts_by_category[token_key]
+            scored_tokens = []
+            cat_total = sum(cat_counter.values()) or 1
+            global_total = sum(global_token_counts.values()) or 1
+            for tok, count in cat_counter.items():
+                if count < 3:
+                    continue
+                p_cat = count / cat_total
+                p_global = global_token_counts[tok] / global_total
+                score = p_cat / max(p_global, 1e-9)
+                scored_tokens.append((score, count, tok))
+            scored_tokens.sort(reverse=True)
+            cat_profiles[category] = {
+                "surfaces": weighted_list(category_surface_counts[artifact_type][category]),
+                "length_buckets": weighted_list(category_length_counts[artifact_type][category]),
+                "anchors": [tok for _score, _count, tok in scored_tokens[:80]],
+            }
+        artifact_profiles[artifact_type] = {
+            "rows": int(artifact_counts[artifact_type]),
+            "categories": categories,
+            "surfaces": weighted_list(surface_counts[artifact_type]),
+            "length_buckets": weighted_list(length_counts[artifact_type]),
+            "category_profiles": cat_profiles,
+        }
+
+    profile = {
+        "schema": "external_github_corpus_semantic_style_profile_v1",
+        "source": "independent weekly GitHub semantic corpus aggregate counts only; no evaluation trace text",
+        "corpus_path": str(corpus_path),
+        "rows_scanned": int(min(rows_seen, max_rows)),
+        "artifact_profiles": artifact_profiles,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(profile, indent=2)[:12000], encoding="utf-8")
+    print("Built independent semantic style profile:", json.dumps(profile, indent=2)[:3000])
+    return profile
 
 
 def _shape_ok_for_bin_token(token: str) -> bool:
@@ -802,6 +994,13 @@ def main() -> None:
         out / "calibrated_token_bins_report.json",
         seed=42,
     )
+    style_profile_path = root / "token_binning_data" / "semantic_style_profile.json"
+    build_independent_semantic_style_profile(
+        corpus_path,
+        style_profile_path,
+        out / "semantic_style_profile_report.json",
+    )
+    os.environ["STEGO_SEMANTIC_STYLE_PROFILE"] = str(style_profile_path)
 
     smoke_dir = out / "smoke_traces"
     full_dir = out / "covert_traces_full"
