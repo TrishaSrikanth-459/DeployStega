@@ -385,7 +385,12 @@ def build_independent_semantic_style_profile(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(profile, indent=2)[:12000], encoding="utf-8")
+    report_payload = json.loads(json.dumps(profile))
+    for artifact_profile in (report_payload.get("artifact_profiles") or {}).values():
+        for cat_profile in (artifact_profile.get("category_profiles") or {}).values():
+            anchors = cat_profile.get("anchors") or []
+            cat_profile["anchors"] = anchors[:20]
+    report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
     print("Built independent semantic style profile:", json.dumps(profile, indent=2)[:3000])
     return profile
 
