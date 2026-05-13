@@ -413,6 +413,11 @@ def _shape_ok_for_bin_token(token: str) -> bool:
         return False
     if "/" in low or "\\" in low:
         return False
+    # Tracking/query/HTML attribute names are source-format artifacts. They can
+    # enter the weekly corpus through bot-rendered Markdown/HTML and become
+    # obvious covert-only lexical tells if used as bin words.
+    if re.fullmatch(r"(?:utm_[a-z0-9_]+|fbclid|gclid|href|src|alt|img|url)", low):
+        return False
     if re.fullmatch(r"v?\d+(?:[._-]\d+){1,}.*", low):
         return False
     if re.fullmatch(r"[a-f0-9]{8,}", low):

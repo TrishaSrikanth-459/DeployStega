@@ -1272,9 +1272,10 @@ SOURCE_TRAILING_PR_RE = re.compile(r"\s*\(?#(?:PR)?\d{3,}\)?\s*$", re.IGNORECASE
 SOURCE_INLINE_REF_RE = re.compile(r"(?<![A-Za-z0-9_])#(?:\d{3,}|[A-Z][A-Z0-9_-]{2,})(?![A-Za-z0-9_])")
 SOURCE_LONG_HEX_RE = re.compile(r"\b[0-9a-f]{12,40}\b", re.IGNORECASE)
 SOURCE_HEADING_LABEL_RE = re.compile(
-    r"^\s*(summary|test plan|tests?|fixes?|closes?|resolves?|motivation|context|changes?|issue|problem|solution)\s*:\s*",
+    r"^\s*(summary|test plan|tests?|fixes?|closes?|resolves?|motivation|context|changes?|issue|problem|solution|pr url|pull request url|issue url|url)\s*:\s*",
     re.IGNORECASE,
 )
+SOURCE_URL_LABEL_RE = re.compile(r"\b(?:pr|pull request|issue)?\s*url\b", re.IGNORECASE)
 
 
 def _strip_inline_source_markers(line: str) -> str:
@@ -1287,6 +1288,7 @@ def _strip_inline_source_markers(line: str) -> str:
     line = SOURCE_LABEL_PREFIX_RE.sub("", line).strip()
     line = SOURCE_TRAILING_PR_RE.sub("", line).strip()
     line = SOURCE_HEADING_LABEL_RE.sub("", line).strip()
+    line = SOURCE_URL_LABEL_RE.sub(" ", line).strip()
     line = SOURCE_INLINE_REF_RE.sub(" ", line)
     line = SOURCE_LONG_HEX_RE.sub(" ", line)
     return line
