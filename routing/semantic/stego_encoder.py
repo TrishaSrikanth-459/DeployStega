@@ -304,9 +304,9 @@ STYLE_SURFACE_GUIDANCE: Dict[str, str] = {
     "terse_subject": "Keep it terse, almost commit-message-like, with one short explanatory sentence if needed.",
     "short_subject_plus_body": "Start with a short subject-like clause, then one compact body paragraph.",
     "compact_paragraph": "Use one compact paragraph with ordinary GitHub PR/issue prose.",
-    "multi_paragraph_body": "Use two short paragraphs; no headings, no lists.",
-    "sectioned_body": "Use light section wording in prose, but avoid Markdown headings and templates.",
-    "bullet_body": "Use prose that reads like bullets were collapsed into sentences; do not emit actual bullets.",
+    "multi_paragraph_body": "Use two short paragraphs or two clear clauses; it may include a natural parenthetical aside.",
+    "sectioned_body": "Use light PR/issue labels such as Summary:, Testing:, Expected:, Actual:, Before:, or After: when natural. Keep it compact.",
+    "bullet_body": "Use short list-like clauses or a compact checklist-style body when natural; avoid looking like a raw token list.",
 }
 
 
@@ -1128,6 +1128,7 @@ Text:
                 "mix terse fragments, commit-message phrasing, dependency/backport/status bodies, bug reports, and practical rationale without sounding like an assistant. "
                 "Follow the independent-corpus style target when provided. If an existing public artifact body excerpt is provided, use its topic and register as cover context without copying exact sentences. "
                 "Avoid assistant-like polish, symmetric sentence structure, repeated connective filler, and generic review-note wording; vary openings naturally. "
+                "Do not make every sentence a polished 'X and Y and Z' construction; real PR/issue bodies often use colons, parentheses, short fragments, PR/issue references, before/after language, and occasional first-person or team wording. "
                 "Do not add raw URLs, approval footers, emails, markdown tables, checklists, or code fences. "
                 "Avoid dumping identifiers as a bare checklist, code fence, or sentence-opening token run. "
                 "Some required tokens may be code identifiers such as method names, dotted "
@@ -1426,7 +1427,9 @@ Text:
             "inventory, list, table, code block, or Markdown-formatted identifier list; weave them into one plausible PR/issue edit. "
             "Avoid starting any sentence with multiple required tokens back-to-back; "
             "put each required token inside normal grammar with verbs and connective words. "
-            "Vary sentence openings and body shape so repeated chunks do not share an obvious generated template. If given an existing public artifact body excerpt, preserve its topic/register but do not copy exact sentences."
+            "Vary sentence openings and body shape so repeated chunks do not share an obvious generated template. "
+            "Use ordinary GitHub punctuation naturally; colons, parentheses, and short before/after or expected/actual clauses are acceptable when they fit the style target. "
+            "If given an existing public artifact body excerpt, preserve its topic/register but do not copy exact sentences."
         )
 
         # ---- 5. Independent-corpus style profile and surface variation ----
@@ -1455,6 +1458,8 @@ Text:
                 f"- surface guidance: {STYLE_SURFACE_GUIDANCE.get(surface, STYLE_SURFACE_GUIDANCE['compact_paragraph'])}"
                 f"{anchor_hint}\n\n"
             )
+        else:
+            surface = ""
 
         # ---- 6. PR/issue body archetype and surface-form variation ----
         archetype_label = str(body_archetype.get("label", "pr_issue_body"))
@@ -1468,7 +1473,28 @@ Text:
         sf_label = surface_form.get("label", "prose")
 
         format_hints: List[str] = []
-        if allow_bullets:
+        if surface == "sectioned_body":
+            format_hints.append(
+                "Use compact section-like PR/issue wording with one or two natural labels ending in ':' "
+                "(for example Summary, Testing, Expected, Actual, Before, or After). Keep labels inline or on short lines; no Markdown heading syntax."
+            )
+        elif surface == "bullet_body":
+            format_hints.append(
+                "Use a compact list-like PR/issue body: short clauses are okay, and a few '-' bullets are allowed if they read like a real issue/PR body. Do not make the bullets only required tokens."
+            )
+        elif surface == "multi_paragraph_body":
+            format_hints.append(
+                "Use two short paragraphs or two clear clauses. A parenthetical aside or PR/issue reference is okay when natural."
+            )
+        elif surface == "terse_subject":
+            format_hints.append(
+                "Use a terse subject-like body of 1-2 sentences. It may read like a commit/PR title plus a compact validation note."
+            )
+        elif surface == "short_subject_plus_body":
+            format_hints.append(
+                "Start with a short subject-like clause, then one compact explanatory body sentence. Parentheses are okay if natural."
+            )
+        elif allow_bullets:
             format_hints.append(
                 "Format as a brief bullet list (3-6 items, '-' prefix). Bullets are short fragments."
             )
@@ -1478,7 +1504,7 @@ Text:
             )
         else:
             format_hints.append(
-                f"Write {sentence_min}-{sentence_max} sentences as compact PR/issue prose. Fragments and title-like clauses are fine; avoid repeating fixed labels such as Summary: or Test Plan:. No bullets, no fenced code blocks."
+                f"Write {sentence_min}-{sentence_max} sentences as compact PR/issue prose. Fragments, title-like clauses, colons, and parentheticals are fine when natural. No fenced code blocks."
             )
         if not force_period:
             format_hints.append("It is fine if the note does not end in a period.")
