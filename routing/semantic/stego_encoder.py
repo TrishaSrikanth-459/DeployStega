@@ -1034,10 +1034,6 @@ Text:
         """Reject outputs that are just a visible list of encoder tokens."""
         if "```" in text:
             return True
-        if text.count("\n") > 1:
-            return True
-        if re.search(r"(?m)^\s*[-*•]\s+`?\w", text):
-            return True
 
         required = {w.lower() for w in required_words}
         if not required:
@@ -1068,20 +1064,15 @@ Text:
                 meaningful_lines += 1
             if required_hits:
                 density = required_hits / max(1, len(tokens))
-                first_four_hits = sum(1 for t in lower_tokens[:4] if t in required)
-                first_six_hits = sum(1 for t in lower_tokens[:6] if t in required)
-                # A common failure mode is a sentence that opens with raw
-                # encoder tokens and only later adds a verb. Real comments may
-                # contain identifiers, but they rarely begin with 3-4 unrelated
-                # required tokens in a row.
-                if first_four_hits >= 3 or first_six_hits >= 4:
-                    return True
-                if len(tokens) <= 3 or density >= 0.65:
+                # With corpus-calibrated bins many required tokens are common
+                # GitHub words ("update", "fix", "test", "files"), so a normal
+                # sentence can contain several required hits. Only reject lines
+                # that are almost entirely required tokens and lack ordinary
+                # connective/verb structure.
+                if len(tokens) <= 3 or (density >= 0.80 and not verbish.search(stripped)):
                     bare_required_lines += 1
 
-        if "```" in text and bare_required_lines >= 1:
-            return True
-        if bare_required_lines >= 2 and meaningful_lines <= bare_required_lines:
+        if bare_required_lines >= 2 and meaningful_lines < bare_required_lines:
             return True
         return False
 
