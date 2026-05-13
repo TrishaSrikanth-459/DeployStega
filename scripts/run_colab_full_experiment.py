@@ -471,11 +471,23 @@ def build_calibrated_token_bins(
         raise RuntimeError(f"No usable semantic corpus tokens found in {corpus_path}")
 
     min_df = 1 if array_words_mode else max(3, int(0.0005 * max(1, doc_count)))
-    ranked = [w for w, df in doc_freq.items() if df >= min_df]
+    # Avoid turning the byte codebook into a visible source of repeated
+    # function/boilerplate words. Extremely high document-frequency tokens are
+    # independently corpus-derived, but when payload bytes are non-uniform they
+    # become overrepresented in covert text ("and", "the", "current", etc.).
+    # Use the stable middle of the corpus distribution instead: common enough
+    # for natural PR/issue prose, not so common that token-binning itself leaves
+    # a lexical fingerprint.
+    max_df = None if array_words_mode else max(min_df + 1, int(0.03 * max(1, doc_count)))
+    ranked = [
+        w
+        for w, df in doc_freq.items()
+        if df >= min_df and (max_df is None or df <= max_df)
+    ]
     if len(ranked) < bin_size:
         ranked = [w for w, _ in total_freq.most_common(max(bin_size, len(total_freq)))]
     ranked.sort(key=lambda w: (doc_freq[w], total_freq[w]), reverse=True)
-    candidates = ranked[: max(bin_size * 16, bin_size)]
+    candidates = ranked[: max(bin_size * 24, bin_size)]
     if len(candidates) < bin_size:
         raise RuntimeError(
             f"Not enough independent corpus tokens for semantic bins: {len(candidates)} from {corpus_path}"
@@ -492,10 +504,14 @@ def build_calibrated_token_bins(
     ascii_prior = b" etaoinshrdlucmfwypvbgkqjxzETAOINSHRDLUCMFWYPVBGKQJXZ0123456789_-.#/:,()[]{}\n"
     for bval in ascii_prior:
         byte_counts[bval] += 2.0
-    byte_order = sorted(range(min(256, bin_size)), key=lambda i: (-byte_counts[i], i))
+    # Keep payload-byte statistics in the report, but do not align frequent
+    # payload bytes to the highest-frequency corpus words. That old alignment
+    # improved prompt convenience but created a direct semantic tell: common
+    # payload bytes repeatedly emitted the same common GitHub words.
+    byte_order = list(range(min(256, bin_size)))
 
     rng = random.Random(seed)
-    weights = [max(1.0, float(doc_freq[w]) ** 0.55) for w in candidates]
+    weights = [max(1.0, float(doc_freq[w]) ** 0.25) for w in candidates]
     bins: List[List[str]] = []
     for _ in range(bin_count):
         pool = list(candidates)
@@ -513,7 +529,9 @@ def build_calibrated_token_bins(
                     break
             chosen.append(pool.pop(idx))
             pool_weights.pop(idx)
-        chosen.sort(key=lambda w: (doc_freq[w], total_freq[w], rng.random()), reverse=True)
+        # Randomize byte positions within each bin so a frequent payload byte
+        # maps to varied mid-frequency corpus words across byte-indexed bins.
+        rng.shuffle(chosen)
         ordered: List[Optional[str]] = [None] * bin_size
         for token, byte_idx in zip(chosen, byte_order):
             ordered[byte_idx] = casing.get(token, token)
@@ -534,6 +552,7 @@ def build_calibrated_token_bins(
         "bin_size": bin_size,
         "candidate_count": len(candidates),
         "min_df": min_df,
+        "max_df": max_df,
         "bins": bins,
     }
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
