@@ -106,7 +106,7 @@ PERSONAS: List[Tuple[str, str]] = [
     (
         "issue_reporter",
         "Write like a maintainer or user editing an issue body. Describe the observed "
-        "behavior, expected behavior, or repro clue without sounding polished.",
+        "problem, reproduction clue, migration context, or impact note without sounding polished.",
     ),
     (
         "backport_maintainer",
@@ -202,8 +202,8 @@ BODY_ARCHETYPES: List[Dict[str, str]] = [
     {
         "label": "issue_repro",
         "instruction": (
-            "Use the shape of an edited issue report: mention what was observed, "
-            "what was expected, and one repro or validation clue. Keep it compact."
+            "Use the shape of an edited issue report: mention a symptom, repro detail, "
+            "environment clue, migration note, or maintainer follow-up. Keep it compact."
         ),
     },
     {
@@ -278,8 +278,9 @@ STYLE_CATEGORY_GUIDANCE: Dict[str, str] = {
         "and the practical follow-up. Keep it textual, not a table."
     ),
     "bug_repro_or_issue": (
-        "Use an issue/repro body shape: observed behavior, expected behavior, an error/failure clue, "
-        "or a compact reproduction detail."
+        "Use an issue/repro body shape, but vary the structure: sometimes a symptom-first report, "
+        "sometimes a migration note, sometimes a failing-case explanation, sometimes a short repro. "
+        "Do not default every issue body to 'current behavior / expected behavior' wording."
     ),
     "docs_or_example_update": (
         "Use a docs/example PR-body shape: explain a confusing section, README/example wording, "
@@ -290,8 +291,8 @@ STYLE_CATEGORY_GUIDANCE: Dict[str, str] = {
         "and a compatibility or test note."
     ),
     "issue_discussion": (
-        "Use an issue-body edit shape: practical problem statement with current behavior, expected behavior, "
-        "and enough context for maintainers."
+        "Use an issue-body edit shape: practical maintainer context, migrated issue notes, reproduction clues, "
+        "impact notes, or follow-up discussion. Avoid a fixed current/expected template unless it truly fits."
     ),
     "feature_or_fix_pr": (
         "Use a feature/fix PR-body shape: subject-like first clause, implementation detail, and a compact "
@@ -305,7 +306,7 @@ STYLE_SURFACE_GUIDANCE: Dict[str, str] = {
     "short_subject_plus_body": "Start with a short subject-like clause, then one compact body paragraph.",
     "compact_paragraph": "Use one compact paragraph with ordinary GitHub PR/issue prose.",
     "multi_paragraph_body": "Use two short paragraphs or two clear clauses; it may include a natural parenthetical aside.",
-    "sectioned_body": "Use light PR/issue labels such as Summary:, Testing:, Expected:, Actual:, Before:, or After: when natural. Keep it compact.",
+    "sectioned_body": "Use light PR/issue labels such as Summary:, Testing:, Repro:, Notes:, Before:, or After: when natural. Keep it compact.",
     "bullet_body": "Use short list-like clauses or a compact checklist-style body when natural; avoid looking like a raw token list.",
 }
 
@@ -1129,6 +1130,7 @@ Text:
                 "Follow the independent-corpus style target when provided. If an existing public artifact body excerpt is provided, use its topic and register as cover context without copying exact sentences. "
                 "Avoid assistant-like polish, symmetric sentence structure, repeated connective filler, and generic review-note wording; vary openings naturally. "
                 "Do not make every sentence a polished 'X and Y and Z' construction; real PR/issue bodies often use colons, parentheses, short fragments, PR/issue references, before/after language, and occasional first-person or team wording. "
+                "Use connective words sparingly and vary them; avoid repeating the same glue words or issue-template words across the body. "
                 "Do not add raw URLs, approval footers, emails, markdown tables, checklists, or code fences. "
                 "Avoid dumping identifiers as a bare checklist, code fence, or sentence-opening token run. "
                 "Some required tokens may be code identifiers such as method names, dotted "
@@ -1428,7 +1430,7 @@ Text:
             "Avoid starting any sentence with multiple required tokens back-to-back; "
             "put each required token inside normal grammar with verbs and connective words. "
             "Vary sentence openings and body shape so repeated chunks do not share an obvious generated template. "
-            "Use ordinary GitHub punctuation naturally; colons, parentheses, and short before/after or expected/actual clauses are acceptable when they fit the style target. "
+            "Use ordinary GitHub punctuation naturally; colons, parentheses, and short before/after, repro, migration, or testing clauses are acceptable when they fit the style target. "
             "If given an existing public artifact body excerpt, preserve its topic/register but do not copy exact sentences."
         )
 
@@ -1476,7 +1478,7 @@ Text:
         if surface == "sectioned_body":
             format_hints.append(
                 "Use compact section-like PR/issue wording with one or two natural labels ending in ':' "
-                "(for example Summary, Testing, Expected, Actual, Before, or After). Keep labels inline or on short lines; no Markdown heading syntax."
+                "(for example Summary, Testing, Repro, Notes, Before, or After). Keep labels inline or on short lines; no Markdown heading syntax."
             )
         elif surface == "bullet_body":
             format_hints.append(
