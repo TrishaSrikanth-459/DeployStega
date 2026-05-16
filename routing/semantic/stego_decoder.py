@@ -5,12 +5,17 @@ import os
 import re
 import math
 import glob
+import hashlib
+import random
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from collections import Counter
 import warnings
 
 warnings.filterwarnings("ignore")
+
+INDEX_PERMUTATION_KEY_ENV = "STEGO_INDEX_PERMUTATION_KEY"
+DEFAULT_INDEX_PERMUTATION_KEY = "deploystega-semantic-index-permutation-v1"
 
 
 @dataclass
@@ -115,6 +120,31 @@ class ByteLevelStegoDecoder:
         if not self.bins:
             raise RuntimeError(f"Cannot load bins from {bins_path}: no valid bins found")
 
+    def _permutation_key(self) -> str:
+        return os.getenv(INDEX_PERMUTATION_KEY_ENV, DEFAULT_INDEX_PERMUTATION_KEY)
+
+    def _invert_permuted_index(self, pos_info: Dict[str, Any], chosen_index: int, bits: int) -> int:
+        if not pos_info.get("permuted_index"):
+            return chosen_index
+        cluster_id = pos_info.get("cluster_id")
+        byte_index = pos_info.get("byte_index")
+        symbol_bits = int(pos_info.get("symbol_bits") or bits or 8)
+        if cluster_id is None or byte_index is None:
+            return chosen_index
+        bin_obj = self.bin_by_id.get(cluster_id)
+        if bin_obj is None:
+            return chosen_index
+        alphabet_size = 1 << symbol_bits
+        usable = min(len(bin_obj.tokens), alphabet_size)
+        seed_material = f"{self._permutation_key()}:{cluster_id}:{byte_index}:{symbol_bits}".encode("utf-8")
+        seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
+        perm = list(range(usable))
+        random.Random(seed).shuffle(perm)
+        try:
+            return perm.index(chosen_index)
+        except ValueError:
+            return chosen_index
+
     def decode_with_positions(self, chunks: List[str], positions_file: str) -> str:
         with open(positions_file, "r", encoding="utf-8") as f:
             positions_data = json.load(f)
@@ -193,9 +223,10 @@ class ByteLevelStegoDecoder:
                 continue
 
             chosen_index = pos_info.get("chosen_index", pos_info.get("target_index", 0))
+            decoded_index = self._invert_permuted_index(pos_info, int(chosen_index), bits)
 
             if bits == 4:
-                nibble = chosen_index & 0x0F
+                nibble = decoded_index & 0x0F
                 if byte_index is not None:
                     entry = nibbles_by_index.setdefault(byte_index, {})
                     if encoding_type == "high_nibble":
@@ -208,7 +239,7 @@ class ByteLevelStegoDecoder:
                         else:
                             entry["low"] = nibble
             else:
-                byte_val = chosen_index & 0xFF
+                byte_val = decoded_index & 0xFF
                 if byte_index is not None:
                     bytes_by_index.setdefault(byte_index, byte_val)
 
@@ -259,9 +290,10 @@ class ByteLevelStegoDecoder:
                 continue
 
             chosen_index = pos_info.get("chosen_index", pos_info.get("target_index", 0))
+            decoded_index = self._invert_permuted_index(pos_info, int(chosen_index), bits)
 
             if bits == 4:
-                nibble = chosen_index & 0x0F
+                nibble = decoded_index & 0x0F
                 if encoding_type == "high_nibble":
                     pending_high = nibble
                 elif encoding_type == "low_nibble":
@@ -276,7 +308,7 @@ class ByteLevelStegoDecoder:
                         decoded_bytes.append(((pending_high & 0x0F) << 4) | nibble)
                         pending_high = None
             else:
-                decoded_bytes.append(chosen_index & 0xFF)
+                decoded_bytes.append(decoded_index & 0xFF)
 
         return decoded_bytes
 

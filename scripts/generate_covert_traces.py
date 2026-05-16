@@ -166,27 +166,78 @@ class Metrics:
 
 
 def load_repo_distribution(benign_dir: str) -> Tuple[List[Tuple[str, str]], List[int]]:
-    repo_counter = Counter()
+    """Load repository support for covert semantic payload generation.
+
+    Root cause fixed here: the old sampler used only the first-line repo
+    header from every benign trace. Many of those repos never appear with
+    benign PR/Issue edit text (and some are URL artifacts such as
+    user-attachments/assets or marketplace/actions), so covert semantic text
+    was generated on repo/topic support absent from the benign semantic
+    comparison. That is a source leak, not steganographic signal.
+
+    This sampler uses only metadata from benign PullRequest/Issue edit rows
+    that actually carry text. It never reads or passes the text content to the
+    generator; it only uses owner/repo identifiers and counts to align topical
+    support. If no such rows exist, it falls back to header repos for backwards
+    compatibility.
+    """
+    semantic_repo_counter: Counter[Tuple[str, str]] = Counter()
+    header_repo_counter: Counter[Tuple[str, str]] = Counter()
     trace_files = sorted(Path(benign_dir).glob("user_*.jsonl"))
 
     for fpath in trace_files:
         try:
-            with open(fpath, "r", encoding="utf-8") as f:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
                 first_line = f.readline().strip()
-                if not first_line:
-                    continue
-                header = json.loads(first_line)
-                repo = header.get("repo")
-                if isinstance(repo, list) and len(repo) == 2:
-                    repo_counter[(repo[0], repo[1])] += 1
+                if first_line:
+                    try:
+                        header = json.loads(first_line)
+                        repo = header.get("repo")
+                        if isinstance(repo, list) and len(repo) == 2:
+                            header_repo_counter[(str(repo[0]), str(repo[1]))] += 1
+                    except Exception:
+                        pass
+
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    artifact_class = str(event.get("artifact_class") or event.get("artifactClass") or "")
+                    action = str(event.get("action") or event.get("action_type") or event.get("event_type") or "")
+                    identifier = event.get("identifier")
+                    if (
+                        artifact_class in {"PullRequest", "Issue"}
+                        and action == "edit"
+                        and isinstance(identifier, list)
+                        and len(identifier) >= 2
+                        and event_has_text(event)
+                    ):
+                        owner, repo = str(identifier[0]), str(identifier[1])
+                        if owner and repo:
+                            semantic_repo_counter[(owner, repo)] += 1
         except Exception:
             continue
 
+    repo_counter = semantic_repo_counter or header_repo_counter
     if not repo_counter:
         raise RuntimeError(f"No repo distribution could be loaded from benign traces in {benign_dir}")
 
     repos = list(repo_counter.keys())
     weights = list(repo_counter.values())
+    if semantic_repo_counter:
+        print(
+            f"Loaded semantic PR/Issue-edit repo distribution from benign metadata "
+            f"({len(repos)} unique repos; text content not read for generation)"
+        )
+    else:
+        print(
+            f"Warning: no text-bearing PR/Issue edit repo metadata found; "
+            f"falling back to header repo distribution ({len(repos)} unique repos)"
+        )
     return repos, weights
 
 
@@ -267,6 +318,47 @@ def load_pr_issue_edit_text_distribution(benign_dir: str) -> Tuple[List[str], Li
     classes = [cls for cls, _ in counts.most_common()]
     weights = [counts[cls] for cls in classes]
     return classes, weights
+
+
+def load_semantic_artifact_distribution(
+    benign_dir: str,
+) -> Dict[Tuple[str, str], Dict[str, List[List[Any]]]]:
+    """Return text-bearing PR/Issue identifiers by repo/class from metadata only.
+
+    This closes a subtler source-support leak: even after repo and class support
+    were aligned, covert payloads could be placed on random PR/Issue identifiers
+    from the route snapshot, while benign semantic text was concentrated on the
+    subset of identifiers that actually had body edits. We use only identifiers
+    and text-field presence, never benign text content, so the generator remains
+    independent while the semantic comparison is on the same artifact support.
+    """
+    out: Dict[Tuple[str, str], Dict[str, List[List[Any]]]] = defaultdict(lambda: defaultdict(list))
+    for fpath in sorted(Path(benign_dir).glob("user_*.jsonl")):
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    artifact_class = str(event.get("artifact_class") or event.get("artifactClass") or "")
+                    action = str(event.get("action") or event.get("action_type") or event.get("event_type") or "")
+                    identifier = event.get("identifier")
+                    if (
+                        artifact_class in {"PullRequest", "Issue"}
+                        and action == "edit"
+                        and isinstance(identifier, list)
+                        and len(identifier) >= 3
+                        and event_has_text(event)
+                    ):
+                        repo_key = (str(identifier[0]), str(identifier[1]))
+                        out[repo_key][artifact_class].append(list(identifier))
+        except Exception:
+            continue
+    return {repo: dict(by_class) for repo, by_class in out.items()}
 
 
 def load_benign_trace_length_distribution(benign_dir: str) -> List[int]:
@@ -1061,6 +1153,7 @@ def process_one_secret(
     semantic_artifact_classes: Optional[List[str]] = None,
     semantic_artifact_weights: Optional[List[int]] = None,
     benign_trace_lengths: Optional[List[int]] = None,
+    semantic_artifact_identifiers: Optional[Dict[str, List[List[Any]]]] = None,
 ) -> Tuple[Optional[str], Optional[str], Dict[str, float], Dict[str, Any]]:
     metrics = Metrics()
     verification_stats: Dict[str, Any] = {
@@ -1108,13 +1201,16 @@ def process_one_secret(
 
         semantic_artifact_classes = semantic_artifact_classes or ["PullRequest", "Issue"]
         semantic_artifact_weights = semantic_artifact_weights or [1 for _ in semantic_artifact_classes]
+        identifier_supported_classes = set((semantic_artifact_identifiers or {}).keys())
         semantic_candidates = [
             (cls, weight)
             for cls, weight in zip(semantic_artifact_classes, semantic_artifact_weights)
-            if cls in supported
+            if cls in supported and (not identifier_supported_classes or cls in identifier_supported_classes)
         ]
         if not semantic_candidates:
             fallback_classes = [cls for cls in ("PullRequest", "Issue") if cls in supported]
+            if identifier_supported_classes:
+                fallback_classes = [cls for cls in fallback_classes if cls in identifier_supported_classes]
             if not fallback_classes:
                 fallback_classes = [supported[0]]
             semantic_candidates = [(cls, 1) for cls in fallback_classes]
@@ -1124,7 +1220,13 @@ def process_one_secret(
         semantic_artifact_class = rng.choices(semantic_classes, weights=semantic_weights, k=1)[0]
         semantic_action = "edit" if semantic_artifact_class in {"PullRequest", "Issue"} else "comment"
 
-        semantic_identifier = choose_identifier_from_snapshot(snapshot, semantic_artifact_class, rng)
+        semantic_identifier = None
+        if semantic_artifact_identifiers:
+            candidate_identifiers = semantic_artifact_identifiers.get(semantic_artifact_class) or []
+            if candidate_identifiers:
+                semantic_identifier = list(rng.choice(candidate_identifiers))
+        if semantic_identifier is None:
+            semantic_identifier = choose_identifier_from_snapshot(snapshot, semantic_artifact_class, rng)
         if semantic_identifier is None:
             semantic_identifier = [owner, repo, 1]
         semantic_url = build_web_url(semantic_artifact_class, semantic_identifier)
@@ -1440,9 +1542,11 @@ def main():
 
     if args.feasibility_dir:
         semantic_artifact_classes, semantic_artifact_weights = load_pr_issue_edit_text_distribution(args.feasibility_dir)
+        semantic_artifact_distribution = load_semantic_artifact_distribution(args.feasibility_dir)
         benign_trace_lengths = load_benign_trace_length_distribution(args.feasibility_dir)
     else:
         semantic_artifact_classes, semantic_artifact_weights = ["PullRequest", "Issue"], [1, 1]
+        semantic_artifact_distribution = {}
         benign_trace_lengths = []
     print(
         "Semantic payload artifact support: "
@@ -1639,6 +1743,7 @@ def main():
                 semantic_artifact_classes,
                 semantic_artifact_weights,
                 benign_trace_lengths,
+                semantic_artifact_distribution.get(repo_key, {}),
             )
             future_map[fut] = {
                 "secret_id": secret_id,

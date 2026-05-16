@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import random
@@ -52,6 +53,79 @@ def run(cmd: List[str], *, cwd: Path, log_path: Path | None = None) -> None:
 
 def count_files(path: Path, pattern: str = "*.jsonl") -> int:
     return sum(1 for _ in path.glob(pattern)) if path.exists() else 0
+
+
+def collect_trace_repositories(trace_dir: Path) -> set[str]:
+    """Collect owner/repo names from trace identifiers only, never text.
+
+    This lets the independent corpus calibration match the routing/domain
+    support used by the experiment without reading evaluated benign semantic
+    bodies as exemplars or bin vocabulary.
+    """
+    repos: set[str] = set()
+    for path in sorted(trace_dir.glob("*.jsonl")):
+        try:
+            fh = path.open("r", encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                events = obj.get("events") if isinstance(obj, dict) and isinstance(obj.get("events"), list) else [obj]
+                for event in events:
+                    if not isinstance(event, dict):
+                        continue
+                    ident = event.get("identifier")
+                    if isinstance(ident, list) and len(ident) >= 2:
+                        owner = str(ident[0]).strip()
+                        repo = str(ident[1]).strip()
+                        if owner and repo:
+                            repos.add(f"{owner}/{repo}")
+    return repos
+
+
+def collect_semantic_support_repositories(trace_dir: Path) -> set[str]:
+    """Collect repos that actually support benign PR/Issue edit text.
+
+    This reads only event metadata and whether a text field is present, not the
+    semantic text content. It prevents corpus/bin/profile calibration from being
+    dragged toward route-only or malformed repos that never appear in the benign
+    semantic comparison.
+    """
+    repos: set[str] = set()
+    for path in sorted(trace_dir.glob("*.jsonl")):
+        try:
+            fh = path.open("r", encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                artifact_class = str(event.get("artifact_class") or event.get("artifactClass") or "")
+                action = str(event.get("action") or event.get("action_type") or event.get("event_type") or "")
+                if artifact_class not in {"PullRequest", "Issue"} or action != "edit":
+                    continue
+                if not _extract_semantic_text(event):
+                    continue
+                ident = event.get("identifier")
+                if isinstance(ident, list) and len(ident) >= 2:
+                    owner = str(ident[0]).strip()
+                    repo = str(ident[1]).strip()
+                    if owner and repo:
+                        repos.add(f"{owner}/{repo}")
+    return repos
 
 
 def assert_inputs(root: Path) -> None:
@@ -283,6 +357,7 @@ def build_independent_semantic_style_profile(
     report_path: Path,
     *,
     max_rows: int = 250000,
+    repo_filter: Optional[set[str]] = None,
 ) -> Dict[str, Any]:
     """Build aggregate PR/Issue style profile from the independent corpus.
 
@@ -307,6 +382,9 @@ def build_independent_semantic_style_profile(
         rows_seen += 1
         if rows_seen > max_rows:
             break
+        repo = str(row.get("repository_full_name") or "") if isinstance(row, dict) else ""
+        if repo_filter and repo not in repo_filter:
+            continue
         artifact_type = _artifact_type_from_corpus_row(row)
         if artifact_type not in {"PullRequest", "Issue"}:
             continue
@@ -332,7 +410,22 @@ def build_independent_semantic_style_profile(
                 token_counts_by_category[f"{artifact_type}:{category}"][low] += 1
                 global_token_counts[low] += 1
 
-    if not artifact_counts:
+    total_style_rows = sum(artifact_counts.values())
+    min_route_filtered_style_rows = 500
+    if not artifact_counts or (repo_filter and total_style_rows < min_route_filtered_style_rows):
+        if repo_filter:
+            print(
+                "Route-repo filtered style profile had insufficient independent corpus support "
+                f"({total_style_rows} rows; need at least {min_route_filtered_style_rows}); "
+                "falling back to full independent corpus."
+            )
+            return build_independent_semantic_style_profile(
+                corpus_path,
+                output_path,
+                report_path,
+                max_rows=max_rows,
+                repo_filter=None,
+            )
         raise RuntimeError(f"No PullRequest/Issue style rows found in independent corpus: {corpus_path}")
 
     def weighted_list(counter: Counter[str], *, top: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -380,6 +473,7 @@ def build_independent_semantic_style_profile(
         "source": "independent weekly GitHub semantic corpus aggregate counts only; no evaluation trace text",
         "corpus_path": str(corpus_path),
         "rows_scanned": int(min(rows_seen, max_rows)),
+        "repo_filter_size": len(repo_filter or ()),
         "artifact_profiles": artifact_profiles,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -429,6 +523,80 @@ def _shape_ok_for_bin_token(token: str) -> bool:
     return True
 
 
+
+def build_independent_semantic_exemplars(
+    corpus_path: Path,
+    output_path: Path,
+    report_path: Path,
+    *,
+    max_rows: int = 150000,
+    max_per_class: int = 300,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """Build few-shot style references from the independent GitHub corpus.
+
+    These are not evaluation benign traces and are never used as carrier text.
+    They only give the LLM examples of real GitHub PR/issue body surface style,
+    which aggregate buckets alone failed to capture.
+    """
+    from scripts.adversarial_evaluation import normalize_semantic_text_for_detection
+
+    rng = random.Random(seed)
+    by_class: Dict[str, List[str]] = {"PullRequest": [], "Issue": []}
+    seen = set()
+    rows_scanned = 0
+
+    for row in _corpus_rows(corpus_path):
+        rows_scanned += 1
+        if rows_scanned > max_rows:
+            break
+        artifact = _artifact_type_from_corpus_row(row)
+        if artifact not in by_class:
+            continue
+        raw = _extract_semantic_text(row)
+        if not raw:
+            continue
+        text = normalize_semantic_text_for_detection(raw)
+        text = re.sub(r"\s+", " ", text).strip()
+        words = text.split()
+        if len(words) < 10 or len(words) > 180:
+            continue
+        # Keep exemplars as natural PR/issue bodies, not transport artifacts,
+        # bot footers, sponsor cards, or raw generated/scaffold pages.
+        low = text.lower()
+        if any(marker in low for marker in ("created by pull[bot]", "please sponsor", "automated update", "<!--", "pull request resolved")):
+            continue
+        if re.search(r"https?://|github\.com/|mailto:|<img\b|\|\s*---\s*\|", text, re.I):
+            continue
+        key = re.sub(r"\W+", " ", low).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        by_class[artifact].append(text)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report = {
+        "schema": "external_github_corpus_semantic_exemplars_v1",
+        "source": "independent weekly GitHub semantic corpus; no evaluation benign trace text",
+        "corpus_path": str(corpus_path),
+        "rows_scanned": rows_scanned,
+        "max_per_class": max_per_class,
+        "counts_before_sample": {k: len(v) for k, v in by_class.items()},
+        "counts": {},
+    }
+    with output_path.open("w", encoding="utf-8") as f:
+        for artifact, texts in by_class.items():
+            rng.shuffle(texts)
+            selected = texts[:max_per_class]
+            report["counts"][artifact] = len(selected)
+            for text in selected:
+                f.write(json.dumps({"artifact_class": artifact, "semantic_text": text}, ensure_ascii=False) + "\n")
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print("Built independent semantic exemplars:", json.dumps(report, indent=2)[:2000])
+    return report
+
 def build_calibrated_token_bins(
     corpus_path: Path,
     secrets_dir: Path,
@@ -436,142 +604,293 @@ def build_calibrated_token_bins(
     report_path: Path,
     *,
     seed: int = 42,
-    bin_count: int = 8,
+    bin_count: int = 16,
     bin_size: int = 256,
+    repo_filter: Optional[set[str]] = None,
 ) -> Dict[str, Any]:
-    """Build semantic token bins from the independent weekly GitHub corpus.
+    """Build byte bins from independent PR/Issue corpus text.
 
-    The bin vocabulary must not come from evaluation benign traces. We use the
-    corpus/parser output that was built from GitHub semantic text for the chosen
-    week, then align token-bin byte indexes to aggregate payload-byte frequency.
-    No corpus snippets, benign snippets, or generated examples are sent to the
-    LLM prompt; only the local codebook is changed.
+    The important fix here is not another prompt tweak; it is removing the
+    lexical pressure that made covert text easy to spot. Prior bins selected the
+    broadest repository tokens, which over-selected ubiquitous stop-like words
+    (and/the) and category-heavy nouns (package/json/site). Forced repeatedly,
+    those tokens became a covert-only signature. This version uses only the
+    independent weekly GitHub corpus, restricts support to PR/Issue text, and
+    chooses tokens that are:
+      * broad across repositories,
+      * not so ubiquitous that forcing them changes function-word rates,
+      * not concentrated in one PR/Issue style category.
+
+    Root-cause note: bins must be disjoint. Reusing the same 256-token base
+    vocabulary across all k=16 bins made a small set of carrier words appear in
+    nearly every covert trace. Disjoint bins preserve the same token-binning
+    capacity/reliability while spreading forced words over a much wider
+    independent-corpus vocabulary.
+    No evaluation benign or covert trace text is read.
     """
-    token_re = re.compile(r"[A-Za-z][A-Za-z0-9._-]{1,31}")
+    from scripts.adversarial_evaluation import normalize_semantic_text_for_detection
+
+    token_re = re.compile(r"[A-Za-z][A-Za-z]{2,23}")
     doc_freq: Counter[str] = Counter()
     total_freq: Counter[str] = Counter()
-    casing: Dict[str, str] = {}
+    repo_sets: Dict[str, set] = defaultdict(set)
+    token_category_doc_freq: Dict[str, Counter[str]] = defaultdict(Counter)
+    category_doc_counts: Counter[str] = Counter()
     doc_count = 0
+    repos_seen = set()
 
-    # valid_words.json/candidates.json from corpus_parser can be a JSON array of strings.
     array_words_mode = corpus_path.name in {"valid_words.json", "candidates.json"}
     for row in _corpus_rows(corpus_path):
-        text = _extract_semantic_text(row)
+        raw_text = _extract_semantic_text(row)
+        if not raw_text:
+            continue
+        repo = str(row.get("repository_full_name") or "") if isinstance(row, dict) else ""
+        if repo_filter and repo not in repo_filter:
+            continue
+        artifact = _artifact_type_from_corpus_row(row)
+        # Match the actual semantic-evaluation support. Pulling in commit/log
+        # vocabulary gave the codebook words that are broad on GitHub but odd in
+        # PR/Issue body edits.
+        if not array_words_mode and artifact not in {"PullRequest", "Issue"}:
+            continue
+        category = f"{artifact}:{_classify_corpus_text_style(raw_text, artifact)}"
+
+        text = normalize_semantic_text_for_detection(raw_text)
         if not text:
             continue
         toks: List[str] = []
         for raw in token_re.findall(text):
             tok = raw.strip("._-")
             low = tok.lower()
+            # Shape-only filter: remove obvious source artifacts and identifiers;
+            # later statistical filters handle topic/function-word skew.
+            if tok != low:
+                continue
+            if not low.isalpha():
+                continue
             if not _shape_ok_for_bin_token(low):
                 continue
             toks.append(low)
-            casing.setdefault(low, tok if not tok.isupper() else low)
-        if toks:
-            doc_count += 1
-            doc_freq.update(set(toks))
-            total_freq.update(toks)
+        if not toks:
+            continue
 
+        doc_count += 1
+        category_doc_counts[category] += 1
+        if repo:
+            repos_seen.add(repo)
+        unique = set(toks)
+        doc_freq.update(unique)
+        total_freq.update(toks)
+        for tok in unique:
+            token_category_doc_freq[tok][category] += 1
+            if repo:
+                repo_sets[tok].add(repo)
+
+    repo_count = len(repos_seen)
     if not total_freq:
+        if repo_filter:
+            print("Route-repo filtered token bins had no independent corpus support; falling back to full independent corpus.")
+            return build_calibrated_token_bins(
+                corpus_path,
+                secrets_dir,
+                output_path,
+                report_path,
+                seed=seed,
+                bin_count=bin_count,
+                bin_size=bin_size,
+                repo_filter=None,
+            )
         raise RuntimeError(f"No usable semantic corpus tokens found in {corpus_path}")
 
-    min_df = 1 if array_words_mode else max(3, int(0.0005 * max(1, doc_count)))
-    # Avoid turning the byte codebook into a visible source of repeated
-    # function/boilerplate words. Extremely high document-frequency tokens are
-    # independently corpus-derived, but when payload bytes are non-uniform they
-    # become overrepresented in covert text ("and", "the", "current", etc.).
-    # Use the stable middle of the corpus distribution instead: common enough
-    # for natural PR/issue prose, not so common that token-binning itself leaves
-    # a lexical fingerprint.
-    max_df = None if array_words_mode else max(min_df + 1, int(0.03 * max(1, doc_count)))
-    ranked = [
-        w
-        for w, df in doc_freq.items()
-        if df >= min_df and (max_df is None or df <= max_df)
-    ]
-    if len(ranked) < bin_size:
-        ranked = [w for w, _ in total_freq.most_common(max(bin_size, len(total_freq)))]
-    ranked.sort(key=lambda w: (doc_freq[w], total_freq[w]), reverse=True)
-    candidates = ranked[: max(bin_size * 24, bin_size)]
-    if len(candidates) < bin_size:
+    def normalized_entropy(counter: Counter[str]) -> float:
+        total = sum(counter.values())
+        if total <= 0 or len(counter) <= 1:
+            return 0.0
+        ent = 0.0
+        for value in counter.values():
+            p = value / total
+            ent -= p * math.log(p)
+        return ent / math.log(len(counter))
+
+    selection_passes = []
+    selected_pass = "array_words"
+    min_doc_freq = 1
+    min_repo_freq = 0
+    required_candidate_count = bin_count * bin_size
+
+    if array_words_mode:
+        candidates = [w for w, _ in total_freq.most_common(required_candidate_count)]
+    else:
+        # Need enough tokens for disjoint k x 256 byte bins. These are still
+        # corpus-statistical thresholds, not semantic word lists: tokens must
+        # appear in multiple PR/Issue documents/repos and pass source-shape
+        # filtering, but we avoid selecting only the same 256 broadest tokens.
+        min_doc_freq = max(5, int(0.0001 * max(1, doc_count)))
+        min_repo_freq = max(2, int(0.0002 * max(1, repo_count))) if repo_count else 0
+        def collect_candidates(max_doc_ratio: float, max_category_share: float, min_categories: int, min_entropy: float) -> List[str]:
+            scored = []
+            for tok, df in doc_freq.items():
+                rf = len(repo_sets.get(tok, ())) if repo_count else df
+                if df < min_doc_freq or rf < min_repo_freq:
+                    continue
+                df_ratio = df / max(1, doc_count)
+                # Statistical stop-word ceiling. We are not banning words by
+                # identity; tokens that appear in too many PR/Issue docs become
+                # bad carriers because forcing them distorts style frequencies.
+                if df_ratio > max_doc_ratio:
+                    continue
+                cat_counter = token_category_doc_freq.get(tok, Counter())
+                cat_total = sum(cat_counter.values())
+                if len(cat_counter) < min_categories or cat_total <= 0:
+                    continue
+                category_share = max(cat_counter.values()) / cat_total
+                if category_share > max_category_share:
+                    continue
+                ent = normalized_entropy(cat_counter)
+                if ent < min_entropy:
+                    continue
+                # Favor broad, medium-frequency, category-balanced tokens. The
+                # frequency target keeps us away from both stop words and rare
+                # project nouns.
+                target_ratio = 0.012
+                closeness = -abs(math.log(max(df_ratio, 1e-9) / target_ratio))
+                score = (
+                    rf / max(1, repo_count),
+                    math.log1p(df),
+                    ent,
+                    closeness,
+                    math.log1p(total_freq[tok]),
+                    tok,
+                )
+                scored.append(score)
+            scored.sort(reverse=True)
+            return [tok for *_rest, tok in scored]
+
+        for label, max_doc_ratio, max_category_share, min_categories, min_entropy in (
+            ("balanced_medium", 0.075, 0.42, 4, 0.72),
+            ("balanced_relaxed", 0.110, 0.50, 3, 0.68),
+            ("coverage_relaxed", 0.160, 0.62, 2, 0.60),
+            ("coverage_final", 0.280, 0.85, 2, 0.45),
+        ):
+            cand = collect_candidates(max_doc_ratio, max_category_share, min_categories, min_entropy)
+            selection_passes.append(
+                {
+                    "label": label,
+                    "max_doc_ratio": max_doc_ratio,
+                    "max_category_share": max_category_share,
+                    "min_categories": min_categories,
+                    "min_entropy": min_entropy,
+                    "candidate_count": len(cand),
+                }
+            )
+            if len(cand) >= required_candidate_count:
+                candidates = cand[:required_candidate_count]
+                selected_pass = label
+                break
+        else:
+            # Last-resort fallback is still statistical and independent-corpus
+            # based; report it loudly so it cannot be mistaken for a clean pass.
+            fallback = collect_candidates(0.350, 0.92, 2, 0.35)
+            candidates = fallback[:required_candidate_count]
+            selected_pass = "fallback_relaxed"
+
+    if len(candidates) < required_candidate_count:
+        if repo_filter:
+            print(
+                f"Route-repo filtered token bins found only {len(candidates)} candidates; "
+                "falling back to full independent corpus."
+            )
+            return build_calibrated_token_bins(
+                corpus_path,
+                secrets_dir,
+                output_path,
+                report_path,
+                seed=seed,
+                bin_count=bin_count,
+                bin_size=bin_size,
+                repo_filter=None,
+            )
         raise RuntimeError(
-            f"Not enough independent corpus tokens for semantic bins: {len(candidates)} from {corpus_path}"
+            f"Not enough independent PR/Issue corpus tokens for disjoint balanced byte bins: "
+            f"{len(candidates)} available, {required_candidate_count} required from {corpus_path}"
         )
 
     byte_counts = [1.0] * 256
     for spath in sorted(Path(secrets_dir).glob("*.txt")):
         try:
-            payload = spath.read_bytes()
+            payload_bytes = spath.read_bytes()
         except Exception:
             continue
-        for bval in payload:
+        for bval in payload_bytes:
             byte_counts[bval] += 1.0
-    ascii_prior = b" etaoinshrdlucmfwypvbgkqjxzETAOINSHRDLUCMFWYPVBGKQJXZ0123456789_-.#/:,()[]{}\n"
-    for bval in ascii_prior:
-        byte_counts[bval] += 2.0
-    # Keep payload-byte statistics in the report, but do not align frequent
-    # payload bytes to the highest-frequency corpus words. That old alignment
-    # improved prompt convenience but created a direct semantic tell: common
-    # payload bytes repeatedly emitted the same common GitHub words.
-    byte_order = list(range(min(256, bin_size)))
 
-    rng = random.Random(seed)
-    weights = [max(1.0, float(doc_freq[w]) ** 0.25) for w in candidates]
+    # Put broad selected tokens at byte indices that occur most often in the
+    # payload corpus, independently for each disjoint bin. This preserves
+    # reliability while avoiding the old repeated-256-word lexical signature.
+    byte_order = sorted(range(bin_size), key=lambda b: (-byte_counts[b], b))
+    selected_tokens = candidates[:required_candidate_count]
     bins: List[List[str]] = []
-    for _ in range(bin_count):
-        pool = list(candidates)
-        pool_weights = list(weights)
-        chosen: List[str] = []
-        for _j in range(bin_size):
-            total = sum(pool_weights)
-            pick = rng.random() * total
-            acc = 0.0
-            idx = 0
-            for i, weight in enumerate(pool_weights):
-                acc += weight
-                if acc >= pick:
-                    idx = i
-                    break
-            chosen.append(pool.pop(idx))
-            pool_weights.pop(idx)
-        # Randomize byte positions within each bin so a frequent payload byte
-        # maps to varied mid-frequency corpus words across byte-indexed bins.
-        rng.shuffle(chosen)
-        ordered: List[Optional[str]] = [None] * bin_size
-        for token, byte_idx in zip(chosen, byte_order):
-            ordered[byte_idx] = casing.get(token, token)
-        remaining = iter(casing.get(token, token) for token in chosen[len(byte_order):])
+    for bin_idx in range(bin_count):
+        bin_tokens = selected_tokens[bin_idx * bin_size:(bin_idx + 1) * bin_size]
+        ordered: List[str] = [""] * bin_size
+        for byte_idx, token in zip(byte_order, bin_tokens):
+            ordered[byte_idx] = token
+        fill_iter = iter(bin_tokens)
         for i in range(bin_size):
-            if ordered[i] is None:
-                ordered[i] = next(remaining)
-        bins.append([str(x) for x in ordered])
+            if not ordered[i]:
+                ordered[i] = next(fill_iter)
+        bins.append(ordered)
+    base_tokens = selected_tokens[:bin_size]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema": "external_github_corpus_token_bins_v1_byte_frequency_aligned",
+        "schema": "external_github_corpus_token_bins_v4_balanced_pr_issue_tokens",
         "seed": seed,
-        "source": "independent weekly GitHub semantic corpus plus payload byte marginals; no evaluation trace vocabulary",
+        "source": "independent weekly GitHub PR/Issue corpus; category-balanced medium-frequency tokens; no evaluation trace vocabulary",
         "corpus_path": str(corpus_path),
         "doc_count": doc_count,
+        "repo_count": repo_count,
+        "repo_filter_size": len(repo_filter or ()),
+        "category_doc_counts": dict(category_doc_counts),
         "bin_count": bin_count,
         "bin_size": bin_size,
         "candidate_count": len(candidates),
-        "min_df": min_df,
-        "max_df": max_df,
+        "required_candidate_count": required_candidate_count,
+        "selected_token_count": len(selected_tokens),
+        "disjoint_bins": True,
+        "min_doc_freq": min_doc_freq,
+        "min_repo_freq": min_repo_freq,
+        "selection_passes": selection_passes,
+        "selected_pass": selected_pass,
         "bins": bins,
     }
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     report = {k: v for k, v in payload.items() if k != "bins"}
-    report["top_corpus_tokens"] = ranked[:50]
-    report["top_payload_bytes"] = [
-        {"byte": i, "char": chr(i) if 32 <= i <= 126 else "", "count": byte_counts[i]}
-        for i in sorted(range(256), key=lambda b: (-byte_counts[b], b))[:32]
+    report["top_corpus_tokens"] = [
+        {
+            "token": tok,
+            "doc_freq": int(doc_freq[tok]),
+            "doc_ratio": float(doc_freq[tok] / max(1, doc_count)),
+            "repo_freq": int(len(repo_sets.get(tok, ()))),
+            "category_entropy": float(normalized_entropy(token_category_doc_freq.get(tok, Counter()))),
+            "max_category_share": float(max(token_category_doc_freq.get(tok, Counter()).values()) / max(1, sum(token_category_doc_freq.get(tok, Counter()).values()))),
+            "total_freq": int(total_freq[tok]),
+        }
+        for tok in base_tokens[:80]
+    ]
+    report["top_payload_byte_mapping"] = [
+        {
+            "byte": int(b),
+            "char": chr(b) if 32 <= b <= 126 else "",
+            "count": float(byte_counts[b]),
+            "tokens_by_bin": [bins[bin_idx][b] for bin_idx in range(min(bin_count, 8))],
+        }
+        for b in byte_order[:24]
     ]
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print("Calibrated semantic token bins from independent corpus:", json.dumps(report, indent=2)[:3000])
+    print("Calibrated balanced PR/Issue semantic token bins from independent corpus:", json.dumps(report, indent=2)[:3000])
     return report
-
 
 def read_jsonl_texts(trace_dir: Path, limit: int = 2500) -> List[str]:
     texts: List[str] = []
@@ -690,7 +1009,13 @@ def comparable_pr_issue_edit_records(trace_dir: Path, max_per_file: Optional[int
                 if dedupe_key in seen_in_file:
                     continue
                 seen_in_file.add(dedupe_key)
-                file_records.append({"text": text, "source_file": str(path)})
+                ident = obj.get("identifier")
+                repo = ""
+                artifact_key = artifact_class
+                if isinstance(ident, list) and len(ident) >= 2:
+                    repo = f"{str(ident[0]).strip()}/{str(ident[1]).strip()}"
+                    artifact_key = repo + "/" + artifact_class + "/" + "/".join(str(x) for x in ident[2:])
+                file_records.append({"text": text, "source_file": str(path), "repo": repo, "artifact_key": artifact_key})
                 if max_per_file is not None and len(file_records) >= max_per_file:
                     break
         records.extend(file_records)
@@ -804,38 +1129,139 @@ def tfidf_source_diagnostic(
     seed: int = 42,
     repeats: int = 5,
 ) -> Dict[str, Any]:
-    """Run a lightweight semantic source-leak smoke test.
+    """Run a grouped semantic source-leak smoke test.
 
-    A near-perfect TF-IDF classifier here means the run is probably measuring
-    generator/source style rather than subtle steganographic semantics.
+    Earlier smoke diagnostics split individual text rows at random. That let the
+    classifier see other rows from the same trace file in train and test, so it
+    could memorize trace/repo/topic quirks instead of measuring source-style
+    generalization. This version keeps source files disjoint between train/test
+    and length-matches within each split.
     """
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import accuracy_score, roc_auc_score
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import GroupShuffleSplit
     from sklearn.pipeline import make_pipeline
 
-    benign_records = comparable_pr_issue_edit_records(benign_dir, max_per_file=3)
-    covert_records = comparable_pr_issue_edit_records(covert_sender_dir, max_per_file=3)
-    benign_all = [rec["text"] for rec in benign_records]
-    covert_all = [rec["text"] for rec in covert_records]
-    benign_texts, covert_texts, length_match_report = length_matched_samples(
-        benign_all,
-        covert_all,
-        max_samples_per_class=max_samples_per_class,
-        seed=seed,
+    def match_records(
+        benign_records_in: List[Dict[str, str]],
+        covert_records_in: List[Dict[str, str]],
+        rng_seed: int,
+        cap: int,
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], Dict[str, Any]]:
+        rng = __import__("random").Random(rng_seed)
+        selected_b: List[Dict[str, str]] = []
+        selected_c: List[Dict[str, str]] = []
+        used_b: set[int] = set()
+        used_c: set[int] = set()
+        bins: Dict[str, Dict[str, int]] = {}
+
+        def _match_on(key_fn, label_prefix: str) -> None:
+            by_label = {"benign": defaultdict(list), "covert": defaultdict(list)}
+            for rec in benign_records_in:
+                if id(rec) not in used_b:
+                    by_label["benign"][key_fn(rec)].append(rec)
+            for rec in covert_records_in:
+                if id(rec) not in used_c:
+                    by_label["covert"][key_fn(rec)].append(rec)
+            for key in sorted(set(by_label["benign"]) | set(by_label["covert"])):
+                b = by_label["benign"].get(key, [])[:]
+                c = by_label["covert"].get(key, [])[:]
+                rng.shuffle(b)
+                rng.shuffle(c)
+                k = min(len(b), len(c))
+                if k <= 0:
+                    continue
+                chosen_b = b[:k]
+                chosen_c = c[:k]
+                selected_b.extend(chosen_b)
+                selected_c.extend(chosen_c)
+                used_b.update(id(x) for x in chosen_b)
+                used_c.update(id(x) for x in chosen_c)
+                bins[f"{label_prefix}|{key}"] = {
+                    "match_key": str(key),
+                    "benign_available": len(b),
+                    "covert_available": len(c),
+                    "matched": k,
+                }
+
+        # Strongest control first: same public artifact identifier and length
+        # bin. If a tiny smoke has too little exact support, fall back to repo +
+        # length, then length-only. These are metadata controls, not text reuse.
+        min_comparable = min(20, cap)
+        _match_on(lambda rec: (rec.get("artifact_key", ""), _length_bin(rec["text"])), "artifact_length")
+        # Exact public-artifact matching is the strongest control, but small
+        # smokes often have only a handful of exact overlapping identifiers.
+        # If exact matching is under-powered, fall back to repo+length so the
+        # diagnostic remains statistically meaningful rather than silently
+        # skipping and hiding semantic separability.
+        if len(selected_b) < min_comparable:
+            _match_on(lambda rec: (rec.get("repo", ""), _length_bin(rec["text"])), "repo_length")
+        if len(selected_b) < min_comparable:
+            _match_on(lambda rec: _length_bin(rec["text"]), "length")
+        if not selected_b:
+            b = benign_records_in[:]
+            c = covert_records_in[:]
+            rng.shuffle(b)
+            rng.shuffle(c)
+            n0 = min(len(b), len(c), cap)
+            return b[:n0], c[:n0], {"applied": False, "reason": "no overlapping repo+word-count or word-count bins", "bins": {}}
+        paired = list(zip(selected_b, selected_c))
+        rng.shuffle(paired)
+        if len(paired) > cap:
+            paired = paired[:cap]
+        return [b for b, _ in paired], [c for _, c in paired], {
+            "applied": True,
+            "bins": bins,
+            "raw_word_bins": {
+                "benign": dict(Counter(_length_bin(rec["text"]) for rec in benign_records_in)),
+                "covert": dict(Counter(_length_bin(rec["text"]) for rec in covert_records_in)),
+            },
+        }
+
+    # Keep enough same-artifact evidence for the smoke diagnostic. Source-file
+    # grouping prevents train/test leakage, so limiting to only the first few
+    # records per file can artificially erase true public-artifact overlap and
+    # force noisy repo-only matching.
+    benign_records = comparable_pr_issue_edit_records(benign_dir, max_per_file=25)
+    covert_records = comparable_pr_issue_edit_records(covert_sender_dir, max_per_file=25)
+    source_file_counts = {
+        "benign": len({rec["source_file"] for rec in benign_records}),
+        "covert": len({rec["source_file"] for rec in covert_records}),
+    }
+
+    b_matched, c_matched, length_match_report = match_records(
+        benign_records,
+        covert_records,
+        rng_seed=seed,
+        cap=max_samples_per_class,
     )
-    n = min(len(benign_texts), len(covert_texts), max_samples_per_class)
+    n = min(len(b_matched), len(c_matched), max_samples_per_class)
 
     report: Dict[str, Any] = {
-        "mode": "tfidf_source_diagnostic",
+        "mode": "tfidf_source_diagnostic_grouped_by_source_file",
         "support": "PullRequest/Issue edit text only",
         "normalization": "normalize_semantic_text_for_detection",
-        "benign_count": len(benign_all),
-        "covert_count": len(covert_all),
-        "source_file_counts": {
-            "benign": len({rec["source_file"] for rec in benign_records}),
-            "covert": len({rec["source_file"] for rec in covert_records}),
+        "split_policy": "GroupShuffleSplit by source_file; no trace file appears in both train and test",
+        "matching_policy": "Match benign/covert records by public artifact identifier and word-count bin before TF-IDF; fallback to repo+length, then length-only if tiny smoke lacks exact overlap",
+        "benign_count": len(benign_records),
+        "covert_count": len(covert_records),
+        "source_file_counts": source_file_counts,
+        "repo_counts": {
+            "benign": len({rec.get("repo", "") for rec in benign_records if rec.get("repo", "")}),
+            "covert": len({rec.get("repo", "") for rec in covert_records if rec.get("repo", "")}),
+            "overlap": len(
+                {rec.get("repo", "") for rec in benign_records if rec.get("repo", "")}
+                & {rec.get("repo", "") for rec in covert_records if rec.get("repo", "")}
+            ),
+        },
+        "artifact_key_counts": {
+            "benign": len({rec.get("artifact_key", "") for rec in benign_records if rec.get("artifact_key", "")}),
+            "covert": len({rec.get("artifact_key", "") for rec in covert_records if rec.get("artifact_key", "")}),
+            "overlap": len(
+                {rec.get("artifact_key", "") for rec in benign_records if rec.get("artifact_key", "")}
+                & {rec.get("artifact_key", "") for rec in covert_records if rec.get("artifact_key", "")}
+            ),
         },
         "balanced_n_per_class": n,
         "length_matching": length_match_report,
@@ -843,29 +1269,33 @@ def tfidf_source_diagnostic(
         "accuracy_mean": None,
         "runs": [],
         "top_tfidf_terms": {"benign": [], "covert": []},
-        "benign_examples": benign_texts[:5],
-        "covert_examples": covert_texts[:5],
+        "benign_examples": [rec["text"] for rec in b_matched[:5]],
+        "covert_examples": [rec["text"] for rec in c_matched[:5]],
     }
 
-    if n < 20:
+    if n < 20 or source_file_counts["covert"] < 8 or source_file_counts["benign"] < 8:
         report["skipped"] = True
-        report["reason"] = "Need at least 20 comparable texts per class for a stable smoke diagnostic."
+        report["reason"] = "Need at least 20 comparable texts/class and >=8 source files/class for grouped smoke diagnostic."
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2)[:4000])
         return report
 
-    texts = benign_texts[:n] + covert_texts[:n]
+    records = b_matched[:n] + c_matched[:n]
+    texts = [rec["text"] for rec in records]
     labels = [0] * n + [1] * n
+    groups = [rec["source_file"] for rec in records]
 
     for rep in range(repeats):
-        x_train, x_test, y_train, y_test = train_test_split(
-            texts,
-            labels,
-            test_size=0.35,
-            random_state=seed + rep,
-            stratify=labels,
-        )
+        splitter = GroupShuffleSplit(n_splits=1, test_size=0.35, random_state=seed + rep)
+        train_idx, test_idx = next(splitter.split(texts, labels, groups))
+        x_train = [texts[i] for i in train_idx]
+        x_test = [texts[i] for i in test_idx]
+        y_train = [labels[i] for i in train_idx]
+        y_test = [labels[i] for i in test_idx]
+        if len(set(y_train)) < 2 or len(set(y_test)) < 2:
+            report["runs"].append({"repeat": rep, "skipped": True, "reason": "group split produced one class"})
+            continue
         clf = make_pipeline(
             TfidfVectorizer(
                 lowercase=True,
@@ -879,7 +1309,7 @@ def tfidf_source_diagnostic(
         clf.fit(x_train, y_train)
         scores = clf.predict_proba(x_test)[:, 1]
         preds = (scores >= 0.5).astype(int)
-        if rep == 0:
+        if not report["top_tfidf_terms"]["benign"]:
             vectorizer = clf.named_steps["tfidfvectorizer"]
             classifier = clf.named_steps["logisticregression"]
             terms = vectorizer.get_feature_names_out()
@@ -888,26 +1318,25 @@ def tfidf_source_diagnostic(
             covert_idx = coef.argsort()[-top_k:][::-1]
             benign_idx = coef.argsort()[:top_k]
             report["top_tfidf_terms"] = {
-                "benign": [
-                    {"term": str(terms[i]), "coef": float(coef[i])}
-                    for i in benign_idx
-                ],
-                "covert": [
-                    {"term": str(terms[i]), "coef": float(coef[i])}
-                    for i in covert_idx
-                ],
+                "benign": [{"term": str(terms[i]), "coef": float(coef[i])} for i in benign_idx],
+                "covert": [{"term": str(terms[i]), "coef": float(coef[i])} for i in covert_idx],
             }
-        report["runs"].append(
-            {
-                "repeat": rep,
-                "auc": float(roc_auc_score(y_test, scores)),
-                "accuracy": float(accuracy_score(y_test, preds)),
-            }
-        )
+        report["runs"].append({
+            "repeat": rep,
+            "auc": float(roc_auc_score(y_test, scores)),
+            "accuracy": float(accuracy_score(y_test, preds)),
+            "train_source_files": len({groups[i] for i in train_idx}),
+            "test_source_files": len({groups[i] for i in test_idx}),
+        })
 
-    report["auc_mean"] = float(sum(r["auc"] for r in report["runs"]) / len(report["runs"]))
-    report["accuracy_mean"] = float(sum(r["accuracy"] for r in report["runs"]) / len(report["runs"]))
-    report["skipped"] = False
+    valid_runs = [r for r in report["runs"] if "auc" in r]
+    if not valid_runs:
+        report["skipped"] = True
+        report["reason"] = "All grouped splits were single-class; increase smoke trace count."
+    else:
+        report["auc_mean"] = float(sum(r["auc"] for r in valid_runs) / len(valid_runs))
+        report["accuracy_mean"] = float(sum(r["accuracy"] for r in valid_runs) / len(valid_runs))
+        report["skipped"] = False
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -988,6 +1417,7 @@ def main() -> None:
     parser.add_argument("--target-traces", type=int, default=4000)
     parser.add_argument("--min-traces", type=int, default=3500)
     parser.add_argument("--smoke-traces", type=int, default=25)
+    parser.add_argument("--smoke-max-secret-chunks", type=int, default=20, help="Maximum estimated chunks per smoke secret; lower values make semantic iteration faster.")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--skip-generation", action="store_true")
     parser.add_argument("--smoke-only", action="store_true", help="Run only smoke generation and semantic/token reliability gates, then exit before full generation.")
@@ -999,6 +1429,7 @@ def main() -> None:
     parser.add_argument("--semantic-smoke-max-accuracy", type=float, default=0.95)
     parser.add_argument("--smoke-min-verification-rate", type=float, default=0.95)
     parser.add_argument("--smoke-min-successful-traces", type=int, default=20)
+    parser.add_argument("--smoke-seed", type=int, default=123, help="Seed for smoke trace generation and grouped semantic diagnostic")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -1016,20 +1447,39 @@ def main() -> None:
     print(f"api_version={os.environ.get('AZURE_OPENAI_API_VERSION')}")
 
     corpus_path = find_external_semantic_corpus(root)
+    route_repo_filter = collect_semantic_support_repositories(root / "benign_traces")
+    if not route_repo_filter:
+        route_repo_filter = collect_trace_repositories(root / "benign_traces")
+    (out / "route_repo_filter_report.json").write_text(
+        json.dumps({
+            "repo_count": len(route_repo_filter),
+            "source": "benign PR/Issue-edit repo identifiers and text-field presence only; no semantic text content",
+        }, indent=2),
+        encoding="utf-8",
+    )
+    token_bin_count = int(os.environ.get("DEPLOYSTEGA_TOKEN_BIN_COUNT", "16"))
     build_calibrated_token_bins(
         corpus_path,
         root / "secrets",
         root / "token_binning_data" / "bins_k16.json",
         out / "calibrated_token_bins_report.json",
         seed=42,
+        bin_count=token_bin_count,
+        repo_filter=route_repo_filter,
     )
     style_profile_path = root / "token_binning_data" / "semantic_style_profile.json"
     build_independent_semantic_style_profile(
         corpus_path,
         style_profile_path,
         out / "semantic_style_profile_report.json",
+        repo_filter=route_repo_filter,
     )
     os.environ["STEGO_SEMANTIC_STYLE_PROFILE"] = str(style_profile_path)
+
+    # Do not pass full corpus snippets to the LLM. The generator uses only the
+    # aggregate semantic_style_profile above; keeping exemplar snippets out avoids
+    # both evaluation-trace leakage and independent-corpus phrase copying.
+    os.environ.pop("STEGO_BENIGN_EXEMPLARS_PATH", None)
 
     smoke_dir = out / "smoke_traces"
     full_dir = out / "covert_traces_full"
@@ -1046,10 +1496,9 @@ def main() -> None:
             "--manifest", "experiments/experiment_manifest.json",
             "--num-traces", str(args.smoke_traces),
             "--workers", "1",
-            "--seed", "123",
-            "--max-secret-chunks", "20",
-            "--estimated-bytes-per-chunk", "12",
-            "--diverse-repo-sampling",
+            "--seed", str(args.smoke_seed),
+            "--max-secret-chunks", str(args.smoke_max_secret_chunks),
+            "--estimated-bytes-per-chunk", "4",
         ], cwd=root, log_path=log_dir / "01_smoke_generation.log")
 
         smoke_summary = json.loads((smoke_dir / "generation_summary.json").read_text())
@@ -1066,7 +1515,7 @@ def main() -> None:
             smoke_dir / "sender",
             out / "smoke_semantic_source_diagnostic.json",
             max_samples_per_class=2500,
-            seed=123,
+            seed=args.smoke_seed,
             repeats=5,
         )
         if not args.skip_semantic_smoke_gate:
@@ -1100,7 +1549,7 @@ def main() -> None:
             "--num-traces", str(args.target_traces),
             "--workers", str(args.workers),
             "--seed", "42",
-            "--estimated-bytes-per-chunk", "12",
+            "--estimated-bytes-per-chunk", "4",
             "--min-secret-keep-rate", "0.95",
         ], cwd=root, log_path=log_dir / "02_full_generation.log")
 
